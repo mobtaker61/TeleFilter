@@ -107,26 +107,39 @@ def restart_forwarder():
 atexit.register(stop_forwarder)   # وقتی panel بسته می‌شود bot هم متوقف شود
 
 # ══════════════════════════════════════════════════════════
-#  Telethon — background loop
+#  Telethon — background loop (lazy init)
 # ══════════════════════════════════════════════════════════
 TG_CONNECTED = False
 _auth = {'phase': 'idle', 'phone': None, 'phone_code_hash': None}
 
-_cfg  = load_config()
 _loop = asyncio.new_event_loop()
-_tg   = TelegramClient(
-    os.path.join(BASE_DIR, 'telefilter_panel_session'),
-    _cfg.get('api_id', ''),
-    _cfg.get('api_hash', ''),
-    loop=_loop
-)
+_tg: TelegramClient | None = None   # ساخته می‌شود فقط وقتی credentials موجود است
 threading.Thread(target=_loop.run_forever, daemon=True, name='tg-loop').start()
 
 def tg_run(coro, timeout: int = 30):
+    if _tg is None:
+        raise RuntimeError("Telegram client not initialized — no API credentials yet")
     return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=timeout)
+
+def _make_tg_client(api_id, api_hash):
+    """ساخت یا بازسازی TelegramClient با credentials جدید."""
+    global _tg, TG_CONNECTED
+    if _tg is not None:
+        try:
+            asyncio.run_coroutine_threadsafe(_tg.disconnect(), _loop).result(timeout=5)
+        except Exception:
+            pass
+    _tg = TelegramClient(
+        os.path.join(BASE_DIR, 'telefilter_panel_session'),
+        api_id, api_hash,
+        loop=_loop
+    )
+    TG_CONNECTED = False
 
 async def _connect():
     global TG_CONNECTED
+    if _tg is None:
+        return
     try:
         await _tg.connect()
         TG_CONNECTED = await _tg.is_user_authorized()
@@ -136,11 +149,17 @@ async def _connect():
         TG_CONNECTED = False
         print(f"[Telegram] {e}")
 
-try:
-    tg_run(_connect(), timeout=15)
-    print(f"[Telegram] {'Connected ✓' if TG_CONNECTED else 'Not authorized — login from the panel'}")
-except Exception as e:
-    print(f"[Telegram] Could not connect: {e}")
+# اگر credentials از قبل در config.json موجود است، client را بساز
+_cfg = load_config()
+if _cfg.get('api_id') and _cfg.get('api_hash'):
+    _make_tg_client(_cfg['api_id'], _cfg['api_hash'])
+    try:
+        tg_run(_connect(), timeout=15)
+        print(f"[Telegram] {'Connected ✓' if TG_CONNECTED else 'Not authorized — login from the panel'}")
+    except Exception as e:
+        print(f"[Telegram] Could not connect: {e}")
+else:
+    print("[Telegram] No API credentials — configure from the panel first")
 
 # ══════════════════════════════════════════════════════════
 #  Flask routes — صفحه اصلی + Config
@@ -155,7 +174,24 @@ def get_config():
 
 @app.route('/api/config', methods=['POST'])
 def update_config():
-    save_config(request.get_json())
+    global TG_CONNECTED
+    old_cfg = load_config()
+    data = request.get_json()
+    save_config(data)
+
+    # اگر API credentials تغییر کرد، client را بازسازی کن
+    new_id   = data.get('api_id')
+    new_hash = data.get('api_hash')
+    if new_id and new_hash:
+        creds_changed = (str(new_id) != str(old_cfg.get('api_id', '')) or
+                         new_hash != old_cfg.get('api_hash', ''))
+        if creds_changed or _tg is None:
+            _make_tg_client(new_id, new_hash)
+            try:
+                tg_run(_connect(), timeout=15)
+            except Exception as e:
+                print(f"[Telegram] Reconnect after config change: {e}")
+
     was_running = _fwd_status() == 'running'
     if was_running:
         restart_forwarder()
@@ -164,10 +200,11 @@ def update_config():
 @app.route('/api/status')
 def get_status():
     return jsonify({
-        'connected':    TG_CONNECTED,
+        'connected':     TG_CONNECTED,
+        'has_client':    _tg is not None,
         'has_forum_api': HAS_FORUM_API,
-        'auth_phase':   _auth['phase'],
-        'bot':          _fwd_status(),
+        'auth_phase':    _auth['phase'],
+        'bot':           _fwd_status(),
     })
 
 # ══════════════════════════════════════════════════════════
@@ -198,6 +235,8 @@ def fwd_logs():
 # ══════════════════════════════════════════════════════════
 @app.route('/api/auth/send_code', methods=['POST'])
 def auth_send_code():
+    if _tg is None:
+        return jsonify({'error': 'ابتدا API ID و API Hash را در تنظیمات وارد کن'}), 503
     phone = (request.get_json() or {}).get('phone', '').strip()
     if not phone:
         return jsonify({'error': 'شماره تلفن وارد نشده'}), 400
@@ -246,6 +285,8 @@ def auth_verify_2fa():
 # ══════════════════════════════════════════════════════════
 @app.route('/api/telegram/topics', methods=['GET'])
 def get_tg_topics():
+    if _tg is None:
+        return jsonify({'error': 'no_client', 'msg': 'API credentials وارد نشده'}), 503
     if not TG_CONNECTED:
         return jsonify({'error': 'not_connected', 'msg': 'ابتدا وارد تلگرام شو'}), 503
     if not HAS_FORUM_API:
@@ -265,6 +306,8 @@ def get_tg_topics():
 
 @app.route('/api/telegram/topics', methods=['POST'])
 def create_tg_topic():
+    if _tg is None:
+        return jsonify({'error': 'no_client', 'msg': 'API credentials وارد نشده'}), 503
     if not TG_CONNECTED:
         return jsonify({'error': 'not_connected', 'msg': 'ابتدا وارد تلگرام شو'}), 503
     if not HAS_FORUM_API:
