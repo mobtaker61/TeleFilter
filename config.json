@@ -2,36 +2,18 @@
   "api_id": 36209056,
   "api_hash": "bd56122e61f85d30e4c559689f29c43e",
   "target_group_id": -1003964412419,
-  "sources": [
+  "topics": [
     {
-      "note": "نمونه ۱ — کانال عمومی با فیلتر کلمات کلیدی",
-      "chat": "@channel_username",
-      "topic_id": 1,
-      "filters": [
+      "name": "دلار",
+      "topic_id": 4,
+      "sources": [
         {
-          "keywords": ["دلار", "usd", "USD"],
-          "topic_id": 2,
-          "note": "پیام‌های مربوط به دلار → topic 2"
+          "chat": "@toofan_harirod",
+          "filters": ["نقدی", "USD", "دلار"]
         },
         {
-          "keywords": ["یورو", "eur", "EUR"],
-          "topic_id": 3,
-          "note": "پیام‌های مربوط به یورو → topic 3"
-        }
-      ]
-    },
-    {
-      "note": "نمونه ۲ — گروه پرایوت، فقط topic پیش‌فرض (همه پیام‌ها به یک topic)",
-      "chat": -1001111111111,
-      "topic_id": 5
-    },
-    {
-      "note": "نمونه ۳ — چت خصوصی با فیلتر، بدون topic پیش‌فرض (فقط پیام‌های فیلتر شده ارسال می‌شوند)",
-      "chat": 123456789,
-      "filters": [
-        {
-          "keywords": ["طلا", "gold", "XAU"],
-          "topic_id": 7
+          "chat": "@Dirham_rate",
+          "filters": ["دلار", "USD"]
         }
       ]
     }

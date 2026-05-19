@@ -18,22 +18,10 @@ with open('config.json', 'r', encoding='utf-8') as f:
 
 client = TelegramClient('telefilter_session', config['api_id'], config['api_hash'])
 
-# {chat_id: source_config_dict}
-source_map: dict[int, dict] = {}
+# source_map: {peer_id: [(topic_id, [filter_phrases])]}
+# یک سورس می‌تواند در چند topic مختلف با فیلترهای متفاوت باشد
+source_map: dict[int, list] = {}
 target_entity = None
-
-
-def find_topic(text: str, source_cfg: dict) -> int | None:
-    """
-    فیلترهای کلمه کلیدی را بررسی می‌کند.
-    اگر مطابقت پیدا شد topic_id مربوط را برمی‌گرداند.
-    اگر نه، topic_id پیش‌فرض منبع را برمی‌گرداند (یا None).
-    """
-    text_lower = (text or '').lower()
-    for f in source_cfg.get('filters', []):
-        if any(kw.lower() in text_lower for kw in f['keywords']):
-            return f['topic_id']
-    return source_cfg.get('topic_id')
 
 
 async def setup():
@@ -41,42 +29,54 @@ async def setup():
     target_entity = await client.get_entity(config['target_group_id'])
     logger.info(f"Target group: {getattr(target_entity, 'title', target_entity.id)}")
 
-    for source in config['sources']:
-        try:
-            entity = await client.get_entity(source['chat'])
-            peer_id = get_peer_id(entity)
-            source_map[peer_id] = source
-            name = getattr(entity, 'title', None) or getattr(entity, 'username', None) or str(peer_id)
-            filters = source.get('filters', [])
-            default_topic = source.get('topic_id', '—')
-            logger.info(f"  Monitoring: {name}  |  default topic={default_topic}  |  keyword filters={len(filters)}")
-        except Exception as e:
-            logger.error(f"  Could not resolve '{source['chat']}': {e}")
+    for topic in config.get('topics', []):
+        topic_id = topic['topic_id']
+        topic_name = topic.get('name', str(topic_id))
+
+        for source in topic.get('sources', []):
+            chat = source.get('chat', '')
+            filters = source.get('filters', [])  # لیست عبارات فیلتر
+
+            try:
+                entity = await client.get_entity(chat)
+                peer_id = get_peer_id(entity)
+                name = getattr(entity, 'title', None) or getattr(entity, 'username', None) or str(peer_id)
+
+                if peer_id not in source_map:
+                    source_map[peer_id] = []
+                source_map[peer_id].append((topic_id, filters))
+
+                filter_info = f"{len(filters)} فیلتر" if filters else "همه پیام‌ها"
+                logger.info(f"  [{topic_name}] ← {name}  ({filter_info})")
+            except Exception as e:
+                logger.error(f"  [{topic_name}] Could not resolve '{chat}': {e}")
 
 
 @client.on(events.NewMessage())
 async def forward_handler(event):
-    source_cfg = source_map.get(event.chat_id)
-    if source_cfg is None:
+    entries = source_map.get(event.chat_id)
+    if not entries:
         return
 
-    text = event.message.text or event.message.message or ''
-    topic_id = find_topic(text, source_cfg)
+    text = (event.message.text or event.message.message or '').lower()
 
-    if topic_id is None:
-        return  # هیچ فیلتری مطابقت نداشت و topic پیش‌فرض هم تعریف نشده
+    for topic_id, filters in entries:
+        # اگر فیلتری نداشت → همه پیام‌ها فوروارد شوند
+        # اگر فیلتر داشت → فقط اگر حداقل یک عبارت در پیام پیدا شود
+        if filters and not any(f.lower() in text for f in filters):
+            continue
 
-    try:
-        await client(ForwardMessagesRequest(
-            from_peer=event.chat_id,
-            id=[event.message.id],
-            to_peer=target_entity,
-            top_msg_id=topic_id,
-            random_id=[random.randint(1, 2**63)]
-        ))
-        logger.info(f"Forwarded  chat={event.chat_id}  →  topic={topic_id}")
-    except Exception as e:
-        logger.error(f"Forward failed (chat={event.chat_id}, topic={topic_id}): {e}")
+        try:
+            await client(ForwardMessagesRequest(
+                from_peer=event.chat_id,
+                id=[event.message.id],
+                to_peer=target_entity,
+                top_msg_id=topic_id,
+                random_id=[random.randint(1, 2**63)]
+            ))
+            logger.info(f"Forwarded  chat={event.chat_id}  →  topic={topic_id}")
+        except Exception as e:
+            logger.error(f"Forward failed (chat={event.chat_id}, topic={topic_id}): {e}")
 
 
 async def main():
