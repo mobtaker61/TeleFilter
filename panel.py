@@ -43,8 +43,9 @@ TG_CONNECTED = False
 _cfg = load_config()
 
 _loop = asyncio.new_event_loop()
+# session جداگانه برای panel تا با main.py تداخل نداشته باشد
 _tg = TelegramClient(
-    'telefilter_session',
+    'telefilter_panel_session',
     _cfg.get('api_id', ''),
     _cfg.get('api_hash', ''),
     loop=_loop

@@ -38,7 +38,15 @@ async def setup():
             filters = source.get('filters', [])  # لیست عبارات فیلتر
 
             try:
-                entity = await client.get_entity(chat)
+                # اگر chat یک عدد خالص باشد، ابتدا سعی می‌کنیم
+                # با get_input_entity که از cache استفاده می‌کند resolve کنیم
+                chat_val = chat
+                try:
+                    chat_val = int(chat)
+                except (ValueError, TypeError):
+                    pass  # string/username → همانطور بماند
+
+                entity = await client.get_entity(chat_val)
                 peer_id = get_peer_id(entity)
                 name = getattr(entity, 'title', None) or getattr(entity, 'username', None) or str(peer_id)
 
@@ -48,6 +56,12 @@ async def setup():
 
                 filter_info = f"{len(filters)} فیلتر" if filters else "همه پیام‌ها"
                 logger.info(f"  [{topic_name}] ← {name}  ({filter_info})")
+            except ValueError:
+                logger.warning(
+                    f"  [{topic_name}] '{chat}' پیدا نشد.\n"
+                    f"    ► اگر چت خصوصی است، ابتدا یک پیام به او بفرست یا\n"
+                    f"      بجای User ID عددی از @username استفاده کن."
+                )
             except Exception as e:
                 logger.error(f"  [{topic_name}] Could not resolve '{chat}': {e}")
 
