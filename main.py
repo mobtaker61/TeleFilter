@@ -24,9 +24,50 @@ source_map: dict[int, list] = {}
 target_entity = None
 
 
+async def _resolve_entity(client, identifier):
+    """
+    Entity را پیدا می‌کند.
+    اگر get_entity مستقیم ناموفق بود (entity در cache نیست)،
+    از طریق iter_dialogs جستجو می‌کند تا cache پر شود.
+    """
+    try:
+        return await client.get_entity(identifier)
+    except (ValueError, KeyError):
+        pass
+
+    # entity در cache نیست — از dialogs جستجو کن
+    logger.info(f"Entity '{identifier}' not cached — scanning dialogs…")
+    target_id = None
+    try:
+        raw = int(str(identifier).strip())
+        # تلگرام ID سوپرگروه/کانال را با پیشوند -100 ذخیره می‌کند
+        # هر دو فرمت را چک می‌کنیم
+        candidates = {raw, abs(raw)}
+        str_raw = str(abs(raw))
+        if str_raw.startswith('100'):
+            candidates.add(int(str_raw[3:]))
+        target_id = candidates
+    except (ValueError, TypeError):
+        pass
+
+    async for dialog in client.iter_dialogs():
+        did = dialog.id
+        if target_id and did in target_id:
+            logger.info(f"Found via dialogs ✓")
+            return dialog.entity
+        if not target_id and str(identifier) in (dialog.name or '', getattr(dialog.entity, 'username', '') or ''):
+            return dialog.entity
+
+    raise ValueError(
+        f"Cannot find entity '{identifier}'.\n"
+        f"    ► مطمئن شو اکانت تلگرام عضو این گروه است.\n"
+        f"    ► یا از @username گروه به جای ID استفاده کن."
+    )
+
+
 async def setup():
     global target_entity
-    target_entity = await client.get_entity(config['target_group_id'])
+    target_entity = await _resolve_entity(client, config['target_group_id'])
     logger.info(f"Target group: {getattr(target_entity, 'title', target_entity.id)}")
 
     for topic in config.get('topics', []):
@@ -38,15 +79,13 @@ async def setup():
             filters = source.get('filters', [])  # لیست عبارات فیلتر
 
             try:
-                # اگر chat یک عدد خالص باشد، ابتدا سعی می‌کنیم
-                # با get_input_entity که از cache استفاده می‌کند resolve کنیم
                 chat_val = chat
                 try:
                     chat_val = int(chat)
                 except (ValueError, TypeError):
                     pass  # string/username → همانطور بماند
 
-                entity = await client.get_entity(chat_val)
+                entity = await _resolve_entity(client, chat_val)
                 peer_id = get_peer_id(entity)
                 name = getattr(entity, 'title', None) or getattr(entity, 'username', None) or str(peer_id)
 
