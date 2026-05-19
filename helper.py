@@ -8,10 +8,14 @@ import json
 from telethon import TelegramClient
 
 try:
-    from telethon.tl.functions.channels import GetForumTopicsRequest
+    from telethon.tl.functions.messages import GetForumTopicsRequest
     HAS_FORUM_API = True
 except ImportError:
-    HAS_FORUM_API = False
+    try:
+        from telethon.tl.functions.channels import GetForumTopicsRequest
+        HAS_FORUM_API = True
+    except ImportError:
+        HAS_FORUM_API = False
 
 with open('config.json', 'r', encoding='utf-8') as f:
     config = json.load(f)

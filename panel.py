@@ -12,11 +12,16 @@ from telethon import TelegramClient
 from telethon.tl.types import UpdateNewChannelMessage, MessageService
 
 try:
-    from telethon.tl.functions.channels import GetForumTopicsRequest, CreateForumTopicRequest
+    # در Telethon این توابع در messages هستند نه channels
+    from telethon.tl.functions.messages import GetForumTopicsRequest, CreateForumTopicRequest
     HAS_FORUM_API = True
 except ImportError:
-    HAS_FORUM_API = False
-    print("[!] نسخه Telethon قدیمی است. اجرا کن: pip install --upgrade telethon")
+    try:
+        from telethon.tl.functions.channels import GetForumTopicsRequest, CreateForumTopicRequest
+        HAS_FORUM_API = True
+    except ImportError:
+        HAS_FORUM_API = False
+        print("[!] Forum Topics API در این نسخه Telethon یافت نشد.")
 
 CONFIG_PATH = 'config.json'
 app = Flask(__name__)
