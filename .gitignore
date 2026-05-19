@@ -1,0 +1,13 @@
+# Telethon session files (contain account credentials - never commit)
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+
+# IDE
+.vscode/
+.idea/
