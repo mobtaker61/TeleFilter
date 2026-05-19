@@ -1,9 +1,10 @@
 {
-  "api_hash": "bd56122e61f85d30e4c559689f29c43e",
   "api_id": 36209056,
+  "api_hash": "bd56122e61f85d30e4c559689f29c43e",
   "target_group_id": -1003964412419,
   "topics": [
     {
+      "topic_id": 4,
       "name": "دلار",
       "sources": [
         {
@@ -22,14 +23,15 @@
         },
         {
           "chat": "@mtotonchi_uae",
-          "filters": []
+          "filters": [
+            "تست"
+          ]
         }
-      ],
-      "topic_id": 4
+      ]
     },
     {
-      "name": "درهم",
       "topic_id": 8,
+      "name": "درهم",
       "sources": [
         {
           "chat": "@Dirham_rate",

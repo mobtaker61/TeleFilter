@@ -1,12 +1,18 @@
 """
-پنل مدیریت TeleFilter
-اجرا: python panel.py  →  http://127.0.0.1:5000
+TeleFilter — پنل مدیریت + مدیریت Bot
+یک دستور برای همه چیز:  python panel.py
+مرورگر:  http://127.0.0.1:5000
 """
 import json
 import random
 import threading
 import asyncio
+import subprocess
+import sys
+import os
+import atexit
 import webbrowser
+from collections import deque
 from flask import Flask, render_template, jsonify, request
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
@@ -21,12 +27,15 @@ except ImportError:
         HAS_FORUM_API = True
     except ImportError:
         HAS_FORUM_API = False
-        print("[!] Forum Topics API در این نسخه Telethon یافت نشد.")
 
-CONFIG_PATH = 'config.json'
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+MAIN_SCRIPT = os.path.join(BASE_DIR, 'main.py')
 app = Flask(__name__)
 
-# ── Config helpers ───────────────────────────────────────
+# ══════════════════════════════════════════════════════════
+#  Config helpers
+# ══════════════════════════════════════════════════════════
 def load_config() -> dict:
     try:
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
@@ -38,26 +47,79 @@ def save_config(data: dict):
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-# ── Telethon — background thread + event loop ────────────
+# ══════════════════════════════════════════════════════════
+#  Forwarder (main.py) process management
+# ══════════════════════════════════════════════════════════
+_fwd_proc : subprocess.Popen | None = None
+_fwd_lock  = threading.Lock()
+_fwd_logs  : deque[str] = deque(maxlen=300)
+
+def _log_reader(proc: subprocess.Popen):
+    """لاگ‌های main.py را در پس‌زمینه می‌خواند."""
+    try:
+        for line in iter(proc.stdout.readline, ''):
+            _fwd_logs.append(line.rstrip())
+    except Exception:
+        pass
+
+def _fwd_status() -> str:
+    if _fwd_proc is None:
+        return 'stopped'
+    if _fwd_proc.poll() is None:
+        return 'running'
+    code = _fwd_proc.returncode
+    return f'crashed ({code})' if code != 0 else 'stopped'
+
+def _stop_unsafe():
+    global _fwd_proc
+    if _fwd_proc and _fwd_proc.poll() is None:
+        _fwd_logs.append('— stopping forwarder —')
+        _fwd_proc.terminate()
+        try:
+            _fwd_proc.wait(timeout=6)
+        except subprocess.TimeoutExpired:
+            _fwd_proc.kill()
+    _fwd_proc = None
+
+def start_forwarder():
+    global _fwd_proc
+    with _fwd_lock:
+        _stop_unsafe()
+        _fwd_logs.append('— starting forwarder —')
+        proc = subprocess.Popen(
+            [sys.executable, MAIN_SCRIPT],
+            cwd=BASE_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True, encoding='utf-8', errors='replace',
+            bufsize=1
+        )
+        _fwd_proc = proc
+        threading.Thread(target=_log_reader, args=(proc,), daemon=True).start()
+
+def stop_forwarder():
+    with _fwd_lock:
+        _stop_unsafe()
+
+def restart_forwarder():
+    start_forwarder()   # start_forwarder خودش اول stop می‌کند
+
+atexit.register(stop_forwarder)   # وقتی panel بسته می‌شود bot هم متوقف شود
+
+# ══════════════════════════════════════════════════════════
+#  Telethon — background loop
+# ══════════════════════════════════════════════════════════
 TG_CONNECTED = False
+_auth = {'phase': 'idle', 'phone': None, 'phone_code_hash': None}
 
-# وضعیت فرآیند لاگین (در حافظه — تک‌کاربره)
-_auth = {
-    'phase': 'idle',       # idle | code_sent | need_2fa | done
-    'phone': None,
-    'phone_code_hash': None,
-}
-
-_cfg = load_config()
+_cfg  = load_config()
 _loop = asyncio.new_event_loop()
-# session جداگانه برای panel تا با main.py همزمان بدون تداخل کار کند
-_tg = TelegramClient(
-    'telefilter_panel_session',
+_tg   = TelegramClient(
+    os.path.join(BASE_DIR, 'telefilter_panel_session'),
     _cfg.get('api_id', ''),
     _cfg.get('api_hash', ''),
     loop=_loop
 )
-
 threading.Thread(target=_loop.run_forever, daemon=True, name='tg-loop').start()
 
 def tg_run(coro, timeout: int = 30):
@@ -80,12 +142,13 @@ try:
 except Exception as e:
     print(f"[Telegram] Could not connect: {e}")
 
-# ── Flask: صفحه اصلی ─────────────────────────────────────
+# ══════════════════════════════════════════════════════════
+#  Flask routes — صفحه اصلی + Config
+# ══════════════════════════════════════════════════════════
 @app.route('/')
 def index():
     return render_template('index.html')
 
-# ── Flask: Config ────────────────────────────────────────
 @app.route('/api/config', methods=['GET'])
 def get_config():
     return jsonify(load_config())
@@ -93,54 +156,71 @@ def get_config():
 @app.route('/api/config', methods=['POST'])
 def update_config():
     save_config(request.get_json())
-    return jsonify({'ok': True})
+    was_running = _fwd_status() == 'running'
+    if was_running:
+        restart_forwarder()
+    return jsonify({'ok': True, 'restarted': was_running})
 
-# ── Flask: Status ────────────────────────────────────────
 @app.route('/api/status')
 def get_status():
     return jsonify({
-        'connected': TG_CONNECTED,
+        'connected':    TG_CONNECTED,
         'has_forum_api': HAS_FORUM_API,
-        'auth_phase': _auth['phase'],   # idle | code_sent | need_2fa | done
+        'auth_phase':   _auth['phase'],
+        'bot':          _fwd_status(),
     })
 
 # ══════════════════════════════════════════════════════════
-#  Auth endpoints — ورود به تلگرام از داخل پنل
+#  Flask routes — Forwarder control
 # ══════════════════════════════════════════════════════════
+@app.route('/api/forwarder/start', methods=['POST'])
+def fwd_start():
+    start_forwarder()
+    return jsonify({'ok': True, 'status': _fwd_status()})
 
+@app.route('/api/forwarder/stop', methods=['POST'])
+def fwd_stop():
+    stop_forwarder()
+    return jsonify({'ok': True, 'status': _fwd_status()})
+
+@app.route('/api/forwarder/restart', methods=['POST'])
+def fwd_restart():
+    restart_forwarder()
+    return jsonify({'ok': True, 'status': _fwd_status()})
+
+@app.route('/api/forwarder/logs')
+def fwd_logs():
+    n = int(request.args.get('n', 80))
+    return jsonify({'logs': list(_fwd_logs)[-n:]})
+
+# ══════════════════════════════════════════════════════════
+#  Flask routes — Auth
+# ══════════════════════════════════════════════════════════
 @app.route('/api/auth/send_code', methods=['POST'])
 def auth_send_code():
-    """مرحله ۱: ارسال کد OTP به شماره تلفن"""
     phone = (request.get_json() or {}).get('phone', '').strip()
     if not phone:
         return jsonify({'error': 'شماره تلفن وارد نشده'}), 400
     try:
         sent = tg_run(_tg.send_code_request(phone))
-        _auth['phase'] = 'code_sent'
-        _auth['phone'] = phone
-        _auth['phone_code_hash'] = sent.phone_code_hash
+        _auth.update(phase='code_sent', phone=phone, phone_code_hash=sent.phone_code_hash)
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/auth/verify_code', methods=['POST'])
 def auth_verify_code():
-    """مرحله ۲: تأیید کد OTP"""
     global TG_CONNECTED
     code = (request.get_json() or {}).get('code', '').strip()
     if not code:
         return jsonify({'error': 'کد وارد نشده'}), 400
     try:
-        tg_run(_tg.sign_in(
-            _auth['phone'],
-            code,
-            phone_code_hash=_auth['phone_code_hash']
-        ))
+        tg_run(_tg.sign_in(_auth['phone'], code, phone_code_hash=_auth['phone_code_hash']))
         TG_CONNECTED = True
         _auth['phase'] = 'done'
         return jsonify({'ok': True})
     except PhoneCodeInvalidError:
-        return jsonify({'error': 'کد اشتباه است. دوباره امتحان کن.'}), 400
+        return jsonify({'error': 'کد اشتباه است'}), 400
     except SessionPasswordNeededError:
         _auth['phase'] = 'need_2fa'
         return jsonify({'ok': False, 'need_2fa': True})
@@ -149,30 +229,27 @@ def auth_verify_code():
 
 @app.route('/api/auth/verify_2fa', methods=['POST'])
 def auth_verify_2fa():
-    """مرحله ۳ (اختیاری): رمز تأیید دو مرحله‌ای"""
     global TG_CONNECTED
-    password = (request.get_json() or {}).get('password', '')
+    pw = (request.get_json() or {}).get('password', '')
     try:
-        tg_run(_tg.sign_in(password=password))
+        tg_run(_tg.sign_in(password=pw))
         TG_CONNECTED = True
         _auth['phase'] = 'done'
         return jsonify({'ok': True})
     except PasswordHashInvalidError:
-        return jsonify({'error': 'رمز اشتباه است.'}), 400
+        return jsonify({'error': 'رمز اشتباه است'}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 # ══════════════════════════════════════════════════════════
-#  Telegram: Topics
+#  Flask routes — Telegram Topics
 # ══════════════════════════════════════════════════════════
-
 @app.route('/api/telegram/topics', methods=['GET'])
 def get_tg_topics():
     if not TG_CONNECTED:
         return jsonify({'error': 'not_connected', 'msg': 'ابتدا وارد تلگرام شو'}), 503
     if not HAS_FORUM_API:
         return jsonify({'error': 'no_api', 'msg': 'pip install --upgrade telethon'}), 501
-
     cfg = load_config()
     try:
         gid = int(cfg['target_group_id'])
@@ -180,11 +257,9 @@ def get_tg_topics():
         return jsonify({'error': 'no_group', 'msg': 'target_group_id در تنظیمات وارد نشده'}), 400
     try:
         result = tg_run(_tg(GetForumTopicsRequest(
-            peer=gid, offset_date=None, offset_id=0,
-            offset_topic=0, limit=100, q=None
+            peer=gid, offset_date=None, offset_id=0, offset_topic=0, limit=100, q=None
         )))
-        topics = [{'id': t.id, 'title': t.title} for t in result.topics]
-        return jsonify({'topics': topics})
+        return jsonify({'topics': [{'id': t.id, 'title': t.title} for t in result.topics]})
     except Exception as e:
         return jsonify({'error': 'api', 'msg': str(e)}), 500
 
@@ -194,12 +269,10 @@ def create_tg_topic():
         return jsonify({'error': 'not_connected', 'msg': 'ابتدا وارد تلگرام شو'}), 503
     if not HAS_FORUM_API:
         return jsonify({'error': 'no_api', 'msg': 'pip install --upgrade telethon'}), 501
-
-    data = request.get_json() or {}
+    data  = request.get_json() or {}
     title = data.get('title', '').strip()
     if not title:
         return jsonify({'error': 'no_title', 'msg': 'عنوان Topic الزامی است'}), 400
-
     cfg = load_config()
     try:
         gid = int(cfg['target_group_id'])
@@ -207,8 +280,7 @@ def create_tg_topic():
         return jsonify({'error': 'no_group', 'msg': 'target_group_id وارد نشده'}), 400
     try:
         result = tg_run(_tg(CreateForumTopicRequest(
-            peer=gid, title=title,
-            random_id=random.randint(1, 2**31)
+            peer=gid, title=title, random_id=random.randint(1, 2**31)
         )))
         topic_id = None
         for upd in result.updates:
@@ -219,12 +291,12 @@ def create_tg_topic():
         if topic_id is None:
             for upd in result.updates:
                 if hasattr(upd, 'id'):
-                    topic_id = upd.id
-                    break
+                    topic_id = upd.id; break
         return jsonify({'ok': True, 'topic_id': topic_id, 'title': title})
     except Exception as e:
         return jsonify({'error': 'api', 'msg': str(e)}), 500
 
+# ══════════════════════════════════════════════════════════
 if __name__ == '__main__':
     webbrowser.open('http://127.0.0.1:5000')
     app.run(debug=False, port=5000, threaded=True)

@@ -11,36 +11,55 @@
     *, *::before, *::after { font-family: 'Vazirmatn', sans-serif; box-sizing: border-box; }
     body { background: #f1f5f9; height: 100vh; overflow: hidden; margin: 0; }
 
-    /* ── Topbar ─────────────────────────────────── */
+    /* ── Topbar ───────────────────────────────── */
     .topbar { height: 56px; background: #1e40af; display: flex; align-items: center;
-      padding: 0 1.25rem; gap: .75rem; box-shadow: 0 2px 10px rgba(0,0,0,.25); position: relative; z-index: 20; }
-    .topbar-brand { color: #fff; font-weight: 700; font-size: 1.1rem; display: flex; align-items: center; gap: .4rem; flex-shrink: 0; }
+      padding: 0 1.25rem; gap: .6rem; box-shadow: 0 2px 10px rgba(0,0,0,.25); z-index: 20; }
+    .topbar-brand { color: #fff; font-weight: 700; font-size: 1.1rem;
+      display: flex; align-items: center; gap: .4rem; flex-shrink: 0; }
     .topbar-brand i { color: #93c5fd; font-size: 1.3rem; }
-    .conn-badge { display: flex; align-items: center; gap: .35rem; font-size: .75rem; padding: 4px 10px; border-radius: 20px; font-weight: 500; cursor: default; }
-    .conn-badge.ok      { background: rgba(34,197,94,.2); color: #86efac; }
-    .conn-badge.err     { background: rgba(239,68,68,.2);  color: #fca5a5; cursor: pointer; }
-    .conn-badge.loading { background: rgba(251,191,36,.2); color: #fde68a; }
-    .conn-badge i { font-size: .65rem; }
-    .topbar-actions { margin-right: auto; display: flex; gap: .5rem; align-items: center; }
+
+    /* badges */
+    .tbadge { display: flex; align-items: center; gap: .3rem; font-size: .74rem;
+      padding: 3px 10px; border-radius: 20px; font-weight: 500; white-space: nowrap; }
+    .tbadge.ok      { background: rgba(34,197,94,.2);  color: #86efac; }
+    .tbadge.err     { background: rgba(239,68,68,.2);   color: #fca5a5; cursor: pointer; }
+    .tbadge.warn    { background: rgba(251,191,36,.2);  color: #fde68a; }
+    .tbadge.loading { background: rgba(251,191,36,.2);  color: #fde68a; }
+    .tbadge i.dot   { font-size: .55rem; }
+
+    .topbar-sep { width: 1px; height: 24px; background: rgba(255,255,255,.15); flex-shrink:0; }
+    .topbar-right { margin-right: auto; display: flex; align-items: center; gap: .5rem; }
+
+    /* bot toggle button */
+    .btn-bot { display: flex; align-items: center; gap: .35rem; border: none;
+      font-size: .8rem; font-weight: 600; padding: .3rem .9rem; border-radius: 8px; cursor: pointer;
+      font-family: 'Vazirmatn', sans-serif; transition: all .2s; }
+    .btn-bot.start  { background: #22c55e; color: #fff; }
+    .btn-bot.start:hover { background: #16a34a; }
+    .btn-bot.stop   { background: rgba(239,68,68,.2); color: #fca5a5; border: 1px solid rgba(239,68,68,.3); }
+    .btn-bot.stop:hover { background: rgba(239,68,68,.35); }
+
     .btn-topbar { border: 1px solid rgba(255,255,255,.25); background: transparent; color: #bfdbfe;
-      font-size: .8rem; padding: .3rem .85rem; border-radius: 8px; cursor: pointer; transition: all .15s;
-      display: flex; align-items: center; gap: .3rem; font-family: 'Vazirmatn', sans-serif; }
+      font-size: .8rem; padding: .3rem .85rem; border-radius: 8px; cursor: pointer;
+      display: flex; align-items: center; gap: .3rem; font-family: 'Vazirmatn', sans-serif; transition: all .15s; }
     .btn-topbar:hover { background: rgba(255,255,255,.1); color: #fff; }
+
     .btn-save { background: #16a34a; border: none; color: #fff; font-size: .8rem; font-weight: 600;
       padding: .3rem 1rem; border-radius: 8px; cursor: pointer; transition: background .2s;
       display: flex; align-items: center; gap: .35rem; font-family: 'Vazirmatn', sans-serif; }
     .btn-save:hover { background: #15803d; }
     .btn-save.dirty { background: #d97706; }
 
-    /* ── Layout ─────────────────────────────────── */
+    /* ── Layout ───────────────────────────────── */
     .layout { display: flex; height: calc(100vh - 56px); }
 
-    /* ── Sidebar ─────────────────────────────────── */
-    .sidebar { width: 260px; flex-shrink: 0; background: #fff; border-left: 1px solid #e2e8f0;
+    /* ── Sidebar ──────────────────────────────── */
+    .sidebar { width: 255px; flex-shrink: 0; background: #fff; border-left: 1px solid #e2e8f0;
       display: flex; flex-direction: column; overflow: hidden; }
     .sidebar-head { padding: .8rem 1rem; border-bottom: 1px solid #e2e8f0; display: flex;
       align-items: center; justify-content: space-between; flex-shrink: 0; gap: .4rem; }
-    .sidebar-head-title { font-weight: 600; font-size: .88rem; color: #334155; display: flex; align-items: center; gap: .35rem; }
+    .sidebar-head-title { font-weight: 600; font-size: .88rem; color: #334155;
+      display: flex; align-items: center; gap: .35rem; }
     .sidebar-head-title i { color: #2563eb; }
     .sidebar-head-btns { display: flex; gap: .3rem; }
     .sidebar-list { overflow-y: auto; flex: 1; }
@@ -51,20 +70,51 @@
     .topic-row.active { background: #eff6ff; }
     .topic-row.active::after { content: ''; position: absolute; right: 0; top: 0; bottom: 0;
       width: 3px; background: #2563eb; border-radius: 3px 0 0 3px; }
-    .t-name { font-weight: 500; font-size: .87rem; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .t-name { font-weight: 500; font-size: .87rem; color: #1e293b; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; }
     .t-meta { font-size: .71rem; color: #94a3b8; margin-top: 2px; }
-    .t-src-badge { background: #eff6ff; color: #2563eb; border-radius: 12px; font-size: .68rem;
-      padding: 1px 7px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+    .t-src-badge { background: #eff6ff; color: #2563eb; border-radius: 12px;
+      font-size: .68rem; padding: 1px 7px; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
     .t-src-badge.empty { background: #f1f5f9; color: #94a3b8; }
-    .sidebar-msg { padding: 1.5rem 1rem; text-align: center; color: #94a3b8; font-size: .82rem; line-height: 1.6; }
+    .sidebar-msg { padding: 1.5rem 1rem; text-align: center; color: #94a3b8; font-size: .82rem; line-height: 1.7; }
     .sidebar-msg i { display: block; font-size: 2rem; opacity: .4; margin-bottom: .5rem; }
 
     /* ── Main ─────────────────────────────────── */
-    .main { flex: 1; overflow-y: auto; padding: 1.75rem 2rem; }
-    .empty-state { display: flex; flex-direction: column; align-items: center;
-      justify-content: center; height: 70%; color: #cbd5e1; text-align: center; }
-    .empty-state i { font-size: 5rem; margin-bottom: .75rem; }
-    .empty-state h5 { color: #94a3b8; font-weight: 500; }
+    .main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+    .main-scroll { flex: 1; overflow-y: auto; padding: 1.75rem 2rem; }
+
+    /* ── Bot dashboard (empty state) ─────────── */
+    .bot-dash { max-width: 780px; margin: 0 auto; }
+    .bot-card { background: #fff; border: 1.5px solid #e2e8f0; border-radius: 16px;
+      padding: 1.25rem 1.5rem; display: flex; align-items: center; gap: 1rem;
+      margin-bottom: 1rem; }
+    .bot-icon { width: 48px; height: 48px; border-radius: 14px; display: flex;
+      align-items: center; justify-content: center; font-size: 1.5rem; flex-shrink: 0; }
+    .bot-icon.running { background: #dcfce7; }
+    .bot-icon.stopped { background: #f1f5f9; }
+    .bot-icon.crashed { background: #fef2f2; }
+    .bot-label { font-weight: 600; font-size: 1rem; color: #1e293b; }
+    .bot-sublabel { font-size: .8rem; color: #64748b; margin-top: 2px; }
+    .bot-actions { margin-right: auto; display: flex; gap: .5rem; }
+
+    /* ── Log panel ────────────────────────────── */
+    .log-wrap { background: #fff; border: 1.5px solid #e2e8f0; border-radius: 16px; overflow: hidden; }
+    .log-head  { padding: .65rem 1rem; border-bottom: 1px solid #f1f5f9; display: flex;
+      align-items: center; justify-content: space-between; }
+    .log-head span { font-size: .82rem; font-weight: 600; color: #334155;
+      display: flex; align-items: center; gap: .4rem; }
+    .log-head span i { color: #2563eb; }
+    .log-body { background: #0f172a; height: 320px; overflow-y: auto; padding: .75rem 1rem;
+      font-family: 'Courier New', monospace; font-size: .78rem; direction: ltr; text-align: left; }
+    .log-line { color: #94a3b8; line-height: 1.6; white-space: pre-wrap; word-break: break-all; }
+    .log-line.info    { color: #7dd3fc; }
+    .log-line.error   { color: #fca5a5; }
+    .log-line.warning { color: #fde68a; }
+    .log-line.sep     { color: #475569; }
+    .log-body::-webkit-scrollbar { width: 4px; }
+    .log-body::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+
+    /* ── Topic detail ─────────────────────────── */
     .topic-hdr { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.75rem;
       padding-bottom: 1.25rem; border-bottom: 1px solid #f1f5f9; }
     .topic-hdr-icon { width: 42px; height: 42px; border-radius: 12px; background: #eff6ff;
@@ -81,41 +131,43 @@
     .source-card:hover { border-color: #93c5fd; box-shadow: 0 0 0 3px #eff6ff; }
     .src-top { display: flex; align-items: center; gap: .6rem; margin-bottom: .6rem; }
     .src-top i { color: #2aabee; font-size: 1.2rem; flex-shrink: 0; }
-    .src-top input { flex: 1; border: 1.5px solid #e2e8f0; border-radius: 8px; padding: .35rem .75rem;
-      font-size: .87rem; direction: ltr; outline: none; transition: border .15s; font-family: 'Vazirmatn', sans-serif; }
+    .src-top input { flex: 1; border: 1.5px solid #e2e8f0; border-radius: 8px;
+      padding: .35rem .75rem; font-size: .87rem; direction: ltr; outline: none;
+      transition: border .15s; font-family: 'Vazirmatn', sans-serif; }
     .src-top input:focus { border-color: #3b82f6; }
-    .src-del { background: none; border: none; color: #e2e8f0; cursor: pointer; padding: 3px 6px;
-      border-radius: 6px; flex-shrink: 0; font-size: 1rem; transition: all .15s; }
+    .src-del { background: none; border: none; color: #e2e8f0; cursor: pointer;
+      padding: 3px 6px; border-radius: 6px; flex-shrink: 0; font-size: 1rem; transition: all .15s; }
     .src-del:hover { color: #ef4444; background: #fef2f2; }
     .filter-area { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-top: .2rem; }
     .filter-lbl { font-size: .74rem; color: #94a3b8; flex-shrink: 0; }
-    .filter-tag { display: inline-flex; align-items: center; gap: 3px; background: #eff6ff; color: #1d4ed8;
-      border: 1px solid #bfdbfe; border-radius: 20px; padding: 3px 8px 3px 5px; font-size: .79rem; }
+    .filter-tag { display: inline-flex; align-items: center; gap: 3px; background: #eff6ff;
+      color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 20px; padding: 3px 8px 3px 5px; font-size: .79rem; }
     .filter-tag button { background: none; border: none; color: #93c5fd; cursor: pointer; padding: 0; font-size: .7rem; line-height: 1; }
     .filter-tag button:hover { color: #ef4444; }
-    .all-badge { background: #fef9c3; color: #854d0e; border: 1px solid #fde047; border-radius: 20px; padding: 3px 10px; font-size: .77rem; }
-    .filter-input { border: 1.5px dashed #93c5fd; border-radius: 20px; padding: 3px 12px; font-size: .79rem;
-      font-family: 'Vazirmatn', sans-serif; outline: none; width: 145px; background: #f8fafc; transition: border .15s, background .15s; }
+    .all-badge { background: #fef9c3; color: #854d0e; border: 1px solid #fde047;
+      border-radius: 20px; padding: 3px 10px; font-size: .77rem; }
+    .filter-input { border: 1.5px dashed #93c5fd; border-radius: 20px; padding: 3px 12px;
+      font-size: .79rem; font-family: 'Vazirmatn', sans-serif; outline: none;
+      width: 145px; background: #f8fafc; transition: border .15s, background .15s; }
     .filter-input:focus { border-color: #2563eb; background: #fff; }
     .filter-input::placeholder { color: #94a3b8; }
     .no-sources { text-align: center; padding: 2rem; color: #94a3b8; font-size: .85rem; }
     .no-sources i { font-size: 2.5rem; opacity: .3; display: block; margin-bottom: .5rem; }
-    .btn-add-src { background: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 12px; color: #64748b;
-      padding: .5rem 1rem; font-size: .83rem; font-family: 'Vazirmatn', sans-serif; cursor: pointer; width: 100%;
-      transition: all .15s; display: flex; align-items: center; justify-content: center; gap: .4rem; }
+    .btn-add-src { background: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 12px;
+      color: #64748b; padding: .5rem 1rem; font-size: .83rem; font-family: 'Vazirmatn', sans-serif;
+      cursor: pointer; width: 100%; transition: all .15s; display: flex; align-items: center; justify-content: center; gap: .4rem; }
     .btn-add-src:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
 
-    /* ── Modals ─────────────────────────────────── */
+    /* ── Modals ───────────────────────────────── */
     .modal-content { border-radius: 16px; border: none; box-shadow: 0 20px 60px rgba(0,0,0,.15); }
-    .modal-header { border-bottom: 1px solid #f1f5f9; padding: 1.1rem 1.4rem; }
-    .modal-body  { padding: 1.4rem; }
-    .modal-footer { border-top: 1px solid #f1f5f9; padding: .9rem 1.4rem; }
+    .modal-header  { border-bottom: 1px solid #f1f5f9; padding: 1.1rem 1.4rem; }
+    .modal-body    { padding: 1.4rem; }
+    .modal-footer  { border-top: 1px solid #f1f5f9; padding: .9rem 1.4rem; }
     .form-label { font-size: .81rem; color: #475569; font-weight: 500; }
-    .form-control { border: 1.5px solid #e2e8f0; border-radius: 10px; padding: .5rem .9rem; font-family: 'Vazirmatn', sans-serif; }
+    .form-control { border: 1.5px solid #e2e8f0; border-radius: 10px;
+      padding: .5rem .9rem; font-family: 'Vazirmatn', sans-serif; }
     .form-control:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px #eff6ff; }
     .form-text { font-size: .75rem; color: #94a3b8; margin-top: 4px; }
-
-    /* ── Login modal steps ──────────────────────── */
     .login-step { display: none; }
     .login-step.active { display: block; }
     .step-indicator { display: flex; align-items: center; justify-content: center; gap: .5rem; margin-bottom: 1.25rem; }
@@ -128,12 +180,12 @@
     .login-error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca;
       border-radius: 10px; padding: .6rem .9rem; font-size: .82rem; margin-top: .75rem; display: none; }
 
-    /* ── Toast ──────────────────────────────────── */
-    .toast-wrap { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 9999; min-width: 220px; }
-    .toast-box { color: #fff; border-radius: 12px; padding: .6rem 1.2rem; font-size: .84rem;
+    /* ── Toast ────────────────────────────────── */
+    .toast-wrap { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 9999; }
+    .toast-box  { color: #fff; border-radius: 12px; padding: .6rem 1.4rem; font-size: .84rem;
       text-align: center; display: none; box-shadow: 0 4px 20px rgba(0,0,0,.2); }
 
-    /* ── Misc ───────────────────────────────────── */
+    /* ── Misc ─────────────────────────────────── */
     .spin { animation: spin .7s linear infinite; display: inline-block; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .sidebar-list::-webkit-scrollbar { width: 4px; }
@@ -146,11 +198,20 @@
 <div class="topbar">
   <div class="topbar-brand"><i class="bi bi-telegram"></i> TeleFilter</div>
 
-  <div id="connBadge" class="conn-badge loading" onclick="onBadgeClick()" title="برای ورود به تلگرام کلیک کن">
-    <i class="bi bi-circle-fill spin"></i> در حال اتصال…
+  <!-- Telegram connection badge -->
+  <div id="connBadge" class="tbadge loading" onclick="onBadgeClick()" title="وضعیت اتصال تلگرام">
+    <i class="bi bi-circle-fill dot spin"></i> در حال اتصال…
   </div>
 
-  <div class="topbar-actions">
+  <div class="topbar-sep"></div>
+
+  <!-- Bot status + toggle -->
+  <div id="botBadge" class="tbadge warn">
+    <i class="bi bi-circle-fill dot"></i> Bot: بررسی…
+  </div>
+  <button id="botToggleBtn" class="btn-bot start" onclick="toggleBot()" style="display:none"></button>
+
+  <div class="topbar-right">
     <button class="btn-topbar" onclick="openSettings()">
       <i class="bi bi-gear-fill"></i> تنظیمات API
     </button>
@@ -162,6 +223,7 @@
 
 <!-- ══ LAYOUT ════════════════════════════════════════════ -->
 <div class="layout">
+
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="sidebar-head">
@@ -184,11 +246,38 @@
   </div>
 
   <!-- Main -->
-  <div class="main" id="mainPanel">
-    <div class="empty-state">
-      <i class="bi bi-ui-checks-grid"></i>
-      <h5>یک Topic انتخاب کن</h5>
-      <p class="text-muted">Topics گروه تلگرامت را از سایدبار انتخاب کن<br>یا با دکمه <strong>+</strong> یک Topic جدید بساز</p>
+  <div class="main">
+    <div class="main-scroll" id="mainPanel">
+      <!-- داشبورد bot — پیش‌فرض -->
+      <div class="bot-dash" id="botDash">
+        <div class="bot-card" id="botStatusCard">
+          <div class="bot-icon stopped" id="botCardIcon">⏹</div>
+          <div>
+            <div class="bot-label">TeleFilter Bot</div>
+            <div class="bot-sublabel" id="botCardLabel">متوقف</div>
+          </div>
+          <div class="bot-actions">
+            <button class="btn btn-success btn-sm" id="botDashBtn" style="border-radius:8px"
+              onclick="toggleBot()">
+              <i class="bi bi-play-fill me-1"></i>شروع
+            </button>
+          </div>
+        </div>
+
+        <div class="log-wrap">
+          <div class="log-head">
+            <span><i class="bi bi-terminal-fill"></i> لاگ‌های Bot</span>
+            <button class="btn btn-sm btn-outline-secondary" style="font-size:.73rem;border-radius:7px"
+              onclick="clearLogs()">پاک کردن</button>
+          </div>
+          <div class="log-body" id="logBody">
+            <div class="log-line sep">— منتظر شروع Bot هستیم —</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- جزئیات Topic -->
+      <div id="topicDetail" style="display:none"></div>
     </div>
   </div>
 </div>
@@ -201,8 +290,6 @@
         <h5 class="modal-title"><i class="bi bi-telegram me-2" style="color:#2aabee"></i>ورود به تلگرام</h5>
       </div>
       <div class="modal-body pt-2">
-
-        <!-- Step indicator -->
         <div class="step-indicator">
           <div class="step-dot active" id="sd1">۱</div>
           <div class="step-line" id="sl1"></div>
@@ -210,18 +297,14 @@
           <div class="step-line" id="sl2"></div>
           <div class="step-dot" id="sd3">۳</div>
         </div>
-
-        <!-- Step 1: Phone -->
         <div class="login-step active" id="lstep1">
           <p class="text-muted text-center mb-3" style="font-size:.85rem">شماره تلفن اکانت تلگرامت را وارد کن</p>
           <label class="form-label">شماره تلفن</label>
           <input type="tel" class="form-control" id="loginPhone" dir="ltr"
             placeholder="+98912..." onkeydown="if(event.key==='Enter') doSendCode()">
-          <div class="form-text">با کد کشور وارد کن. مثال: +989123456789</div>
+          <div class="form-text">با کد کشور. مثال: +989123456789</div>
           <div class="login-error" id="err1"></div>
         </div>
-
-        <!-- Step 2: OTP -->
         <div class="login-step" id="lstep2">
           <p class="text-muted text-center mb-3" style="font-size:.85rem">کد ۵ رقمی که تلگرام فرستاد را وارد کن</p>
           <label class="form-label">کد تأیید</label>
@@ -230,16 +313,13 @@
             onkeydown="if(event.key==='Enter') doVerifyCode()">
           <div class="login-error" id="err2"></div>
         </div>
-
-        <!-- Step 3: 2FA -->
         <div class="login-step" id="lstep3">
-          <p class="text-muted text-center mb-3" style="font-size:.85rem">رمز تأیید دو مرحله‌ای اکانت تلگرامت را وارد کن</p>
+          <p class="text-muted text-center mb-3" style="font-size:.85rem">رمز تأیید دو مرحله‌ای را وارد کن</p>
           <label class="form-label">رمز دو مرحله‌ای (2FA)</label>
           <input type="password" class="form-control" id="login2fa" dir="ltr"
             placeholder="••••••••" onkeydown="if(event.key==='Enter') doVerify2FA()">
           <div class="login-error" id="err3"></div>
         </div>
-
       </div>
       <div class="modal-footer border-0 pt-0">
         <button class="btn btn-primary w-100" id="loginBtn" style="border-radius:10px;padding:.6rem">
@@ -255,7 +335,7 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-gear-fill me-2" style="color:#2563eb"></i>تنظیمات API تلگرام</h5>
+        <h5 class="modal-title"><i class="bi bi-gear-fill me-2" style="color:#2563eb"></i>تنظیمات API</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -267,10 +347,10 @@
           <label class="form-label">API Hash</label>
           <input type="text" class="form-control font-monospace" id="s_api_hash" dir="ltr">
         </div>
-        <div class="mb-1">
+        <div>
           <label class="form-label">Target Group ID</label>
           <input type="text" class="form-control" id="s_group_id" dir="ltr" placeholder="-1001234567890">
-          <div class="form-text">گروهی که Forum Topics دارد و پیام‌ها در آن فوروارد می‌شوند</div>
+          <div class="form-text">گروهی که Forum Topics دارد</div>
         </div>
       </div>
       <div class="modal-footer">
@@ -318,14 +398,9 @@
 // ═══════════════════════════════════════════════════════
 //  State
 // ═══════════════════════════════════════════════════════
-let tgTopics = [];
-let cfgMap   = {};
-let apiCfg   = { api_id:'', api_hash:'', target_group_id:'' };
-let selId    = null;
-let tgOk     = false;
-let forumOk  = false;
-let loginStep = 1;  // 1 | 2 | 3
-
+let tgTopics = [], cfgMap = {}, apiCfg = {}, selId = null;
+let tgOk = false, forumOk = false, botStatus = 'stopped';
+let logPollerTimer = null;
 let loginMdl, settingsMdl, createMdl;
 
 // ═══════════════════════════════════════════════════════
@@ -336,7 +411,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsMdl = new bootstrap.Modal(document.getElementById('settingsModal'));
   createMdl   = new bootstrap.Modal(document.getElementById('createModal'));
 
-  await checkStatus();
+  await refreshStatus();
   const cfg = await (await fetch('/api/config')).json();
   apiCfg = { api_id: cfg.api_id||'', api_hash: cfg.api_hash||'', target_group_id: cfg.target_group_id||'' };
   cfgMap = buildCfgMap(cfg.topics || []);
@@ -345,173 +420,192 @@ document.addEventListener('DOMContentLoaded', async () => {
   else renderSidebar();
 
   markClean();
+  startLogPoller();
+  setInterval(refreshStatus, 4000);   // poll status every 4 s
 });
 
 // ═══════════════════════════════════════════════════════
-//  Status
+//  Status polling
 // ═══════════════════════════════════════════════════════
-async function checkStatus() {
+async function refreshStatus() {
   try {
     const s = await (await fetch('/api/status')).json();
-    tgOk    = s.connected;
-    forumOk = s.has_forum_api;
-    updateBadge();
-  } catch {
-    updateBadge(true);
-  }
+    tgOk      = s.connected;
+    forumOk   = s.has_forum_api;
+    botStatus = s.bot;
+    updateTgBadge();
+    updateBotBadge();
+  } catch { /* silent */ }
 }
 
-function updateBadge(error = false) {
+function updateTgBadge() {
   const b = document.getElementById('connBadge');
-  if (error) {
-    b.className = 'conn-badge err';
-    b.innerHTML = '<i class="bi bi-circle-fill"></i> خطا';
-    return;
-  }
   if (tgOk) {
-    b.className = 'conn-badge ok';
-    b.innerHTML = '<i class="bi bi-circle-fill"></i> متصل به تلگرام';
+    b.className = 'tbadge ok';
+    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> متصل به تلگرام';
     b.title = '';
   } else {
-    b.className = 'conn-badge err';
-    b.innerHTML = '<i class="bi bi-circle-fill"></i> قطع — برای ورود کلیک کن';
+    b.className = 'tbadge err';
+    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> قطع — کلیک برای ورود';
     b.title = 'ورود به تلگرام';
   }
 }
 
-function onBadgeClick() {
-  if (!tgOk) openLogin();
+function updateBotBadge() {
+  const badge  = document.getElementById('botBadge');
+  const btn    = document.getElementById('botToggleBtn');
+  const dashBtn = document.getElementById('botDashBtn');
+  const cardIcon = document.getElementById('botCardIcon');
+  const cardLabel = document.getElementById('botCardLabel');
+
+  btn.style.display = 'flex';
+
+  if (botStatus === 'running') {
+    badge.className = 'tbadge ok';
+    badge.innerHTML = '<i class="bi bi-circle-fill dot"></i> Bot: فعال';
+    btn.className   = 'btn-bot stop';
+    btn.innerHTML   = '<i class="bi bi-stop-fill"></i> توقف';
+    dashBtn.className = 'btn btn-danger btn-sm';
+    dashBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>توقف';
+    cardIcon.className = 'bot-icon running'; cardIcon.textContent = '▶';
+    cardLabel.textContent = 'در حال اجرا — پیام‌ها فوروارد می‌شوند';
+  } else if (botStatus.startsWith('crashed')) {
+    badge.className = 'tbadge err';
+    badge.innerHTML = '<i class="bi bi-circle-fill dot"></i> Bot: خطا';
+    btn.className   = 'btn-bot start';
+    btn.innerHTML   = '<i class="bi bi-arrow-clockwise"></i> راه‌اندازی';
+    dashBtn.className = 'btn btn-warning btn-sm';
+    dashBtn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>راه‌اندازی';
+    cardIcon.className = 'bot-icon crashed'; cardIcon.textContent = '⚠';
+    cardLabel.textContent = 'خطا — ' + botStatus;
+  } else {
+    badge.className = 'tbadge warn';
+    badge.innerHTML = '<i class="bi bi-circle-fill dot"></i> Bot: متوقف';
+    btn.className   = 'btn-bot start';
+    btn.innerHTML   = '<i class="bi bi-play-fill"></i> شروع';
+    dashBtn.className = 'btn btn-success btn-sm';
+    dashBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>شروع';
+    cardIcon.className = 'bot-icon stopped'; cardIcon.textContent = '⏹';
+    cardLabel.textContent = 'متوقف';
+  }
 }
 
 // ═══════════════════════════════════════════════════════
-//  Login flow
+//  Bot controls
 // ═══════════════════════════════════════════════════════
+async function toggleBot() {
+  const endpoint = botStatus === 'running' ? '/api/forwarder/stop' : '/api/forwarder/start';
+  await fetch(endpoint, { method: 'POST' });
+  await refreshStatus();
+  showToast(botStatus === 'running' ? 'Bot شروع به کار کرد' : 'Bot متوقف شد',
+            botStatus === 'running' ? 'success' : 'warning');
+}
+
+// ═══════════════════════════════════════════════════════
+//  Log poller
+// ═══════════════════════════════════════════════════════
+function startLogPoller() {
+  if (logPollerTimer) return;
+  logPollerTimer = setInterval(fetchLogs, 1500);
+  fetchLogs();
+}
+
+let _lastLogCount = 0;
+async function fetchLogs() {
+  try {
+    const data = await (await fetch('/api/forwarder/logs?n=100')).json();
+    if (!data.logs) return;
+    if (data.logs.length === _lastLogCount) return;
+    _lastLogCount = data.logs.length;
+    const box = document.getElementById('logBody');
+    box.innerHTML = data.logs.map(l => `<div class="log-line ${logClass(l)}">${escHtml(l)}</div>`).join('');
+    box.scrollTop = box.scrollHeight;
+  } catch { /* silent */ }
+}
+
+function logClass(line) {
+  if (line.startsWith('—')) return 'sep';
+  if (/ERROR/i.test(line))   return 'error';
+  if (/WARNING/i.test(line)) return 'warning';
+  if (/INFO/i.test(line))    return 'info';
+  return '';
+}
+
+function clearLogs() {
+  _lastLogCount = 0;
+  document.getElementById('logBody').innerHTML = '<div class="log-line sep">— پاک شد —</div>';
+}
+
+// ═══════════════════════════════════════════════════════
+//  Login
+// ═══════════════════════════════════════════════════════
+function onBadgeClick() { if (!tgOk) openLogin(); }
 function openLogin() {
-  loginStep = 1;
   showLoginStep(1);
-  document.getElementById('loginPhone').value = '';
-  document.getElementById('loginCode').value  = '';
-  document.getElementById('login2fa').value   = '';
-  hideLoginError();
+  ['loginPhone','loginCode','login2fa'].forEach(id => document.getElementById(id).value = '');
+  hideLoginErrors();
   setLoginBtn('ارسال کد', doSendCode);
   loginMdl.show();
   setTimeout(() => document.getElementById('loginPhone').focus(), 300);
 }
-
 function showLoginStep(n) {
-  loginStep = n;
   [1,2,3].forEach(i => {
-    document.getElementById(`lstep${i}`).classList.toggle('active', i === n);
-    const dot = document.getElementById(`sd${i}`);
-    dot.classList.toggle('active', i === n);
-    dot.classList.toggle('done',   i < n);
+    document.getElementById(`lstep${i}`).classList.toggle('active', i===n);
+    const d = document.getElementById(`sd${i}`);
+    d.classList.toggle('active', i===n); d.classList.toggle('done', i<n);
   });
-  document.getElementById('sl1').classList.toggle('done', n > 1);
-  document.getElementById('sl2').classList.toggle('done', n > 2);
+  document.getElementById('sl1').classList.toggle('done', n>1);
+  document.getElementById('sl2').classList.toggle('done', n>2);
 }
-
 function setLoginBtn(label, fn) {
   const b = document.getElementById('loginBtn');
   b.innerHTML = `<i class="bi bi-send me-1"></i> ${label}`;
-  b.onclick = fn;
-  b.disabled = false;
+  b.onclick = fn; b.disabled = false;
 }
-
 function setBtnLoading(msg) {
   const b = document.getElementById('loginBtn');
   b.innerHTML = `<i class="bi bi-hourglass-split spin me-1"></i> ${msg}`;
   b.disabled = true;
 }
-
 function showLoginError(step, msg) {
-  const el = document.getElementById(`err${step}`);
-  el.textContent = msg;
-  el.style.display = 'block';
+  const e = document.getElementById(`err${step}`); e.textContent = msg; e.style.display = 'block';
 }
-function hideLoginError() {
-  [1,2,3].forEach(i => document.getElementById(`err${i}`).style.display = 'none');
-}
+function hideLoginErrors() { [1,2,3].forEach(i => document.getElementById(`err${i}`).style.display='none'); }
 
 async function doSendCode() {
   const phone = document.getElementById('loginPhone').value.trim();
-  if (!phone) { showLoginError(1, 'شماره تلفن را وارد کن'); return; }
-  hideLoginError();
-  setBtnLoading('در حال ارسال کد…');
+  if (!phone) { showLoginError(1,'شماره تلفن را وارد کن'); return; }
+  hideLoginErrors(); setBtnLoading('در حال ارسال کد…');
   try {
-    const res  = await fetch('/api/auth/send_code', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({phone})
-    });
-    const data = await res.json();
-    if (data.ok) {
-      showLoginStep(2);
-      setLoginBtn('تأیید کد', doVerifyCode);
-      setTimeout(() => document.getElementById('loginCode').focus(), 100);
-    } else {
-      showLoginError(1, data.error || 'خطا در ارسال کد');
-      setLoginBtn('ارسال کد', doSendCode);
-    }
-  } catch {
-    showLoginError(1, 'خطای شبکه');
-    setLoginBtn('ارسال کد', doSendCode);
-  }
+    const d = await (await fetch('/api/auth/send_code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})})).json();
+    if (d.ok) { showLoginStep(2); setLoginBtn('تأیید کد', doVerifyCode); setTimeout(()=>document.getElementById('loginCode').focus(),100); }
+    else { showLoginError(1, d.error||'خطا'); setLoginBtn('ارسال کد', doSendCode); }
+  } catch { showLoginError(1,'خطای شبکه'); setLoginBtn('ارسال کد', doSendCode); }
 }
-
 async function doVerifyCode() {
   const code = document.getElementById('loginCode').value.trim();
-  if (!code) { showLoginError(2, 'کد را وارد کن'); return; }
-  hideLoginError();
-  setBtnLoading('در حال تأیید…');
+  if (!code) { showLoginError(2,'کد را وارد کن'); return; }
+  hideLoginErrors(); setBtnLoading('در حال تأیید…');
   try {
-    const res  = await fetch('/api/auth/verify_code', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({code})
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await onLoginSuccess();
-    } else if (data.need_2fa) {
-      showLoginStep(3);
-      setLoginBtn('تأیید رمز', doVerify2FA);
-      setTimeout(() => document.getElementById('login2fa').focus(), 100);
-    } else {
-      showLoginError(2, data.error || 'خطا در تأیید');
-      setLoginBtn('تأیید کد', doVerifyCode);
-    }
-  } catch {
-    showLoginError(2, 'خطای شبکه');
-    setLoginBtn('تأیید کد', doVerifyCode);
-  }
+    const d = await (await fetch('/api/auth/verify_code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})).json();
+    if (d.ok) { await onLoginSuccess(); }
+    else if (d.need_2fa) { showLoginStep(3); setLoginBtn('تأیید رمز', doVerify2FA); setTimeout(()=>document.getElementById('login2fa').focus(),100); }
+    else { showLoginError(2, d.error||'خطا'); setLoginBtn('تأیید کد', doVerifyCode); }
+  } catch { showLoginError(2,'خطای شبکه'); setLoginBtn('تأیید کد', doVerifyCode); }
 }
-
 async function doVerify2FA() {
   const pw = document.getElementById('login2fa').value;
-  if (!pw) { showLoginError(3, 'رمز را وارد کن'); return; }
-  hideLoginError();
-  setBtnLoading('در حال تأیید…');
+  if (!pw) { showLoginError(3,'رمز را وارد کن'); return; }
+  hideLoginErrors(); setBtnLoading('در حال تأیید…');
   try {
-    const res  = await fetch('/api/auth/verify_2fa', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({password: pw})
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await onLoginSuccess();
-    } else {
-      showLoginError(3, data.error || 'رمز اشتباه است');
-      setLoginBtn('تأیید رمز', doVerify2FA);
-    }
-  } catch {
-    showLoginError(3, 'خطای شبکه');
-    setLoginBtn('تأیید رمز', doVerify2FA);
-  }
+    const d = await (await fetch('/api/auth/verify_2fa',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})})).json();
+    if (d.ok) { await onLoginSuccess(); }
+    else { showLoginError(3, d.error||'رمز اشتباه'); setLoginBtn('تأیید رمز', doVerify2FA); }
+  } catch { showLoginError(3,'خطای شبکه'); setLoginBtn('تأیید رمز', doVerify2FA); }
 }
-
 async function onLoginSuccess() {
-  tgOk = true;
-  updateBadge();
-  loginMdl.hide();
-  showToast('با موفقیت وارد تلگرام شدی ✓', 'success');
+  tgOk = true; updateTgBadge(); loginMdl.hide();
+  showToast('با موفقیت وارد تلگرام شدی ✓','success');
   await syncTopics();
 }
 
@@ -528,159 +622,132 @@ function saveSettings() {
   apiCfg.api_id          = document.getElementById('s_api_id').value.trim();
   apiCfg.api_hash        = document.getElementById('s_api_hash').value.trim();
   apiCfg.target_group_id = document.getElementById('s_group_id').value.trim();
-  settingsMdl.hide();
-  markDirty();
+  settingsMdl.hide(); markDirty();
 }
 
 // ═══════════════════════════════════════════════════════
-//  Telegram Topics
+//  Telegram topics
 // ═══════════════════════════════════════════════════════
 async function syncTopics() {
   const icon = document.getElementById('syncIcon');
   icon.className = 'bi bi-arrow-clockwise spin';
-  if (!tgOk || !forumOk) { renderSidebar(); icon.className = 'bi bi-arrow-clockwise'; return; }
+  if (!tgOk || !forumOk) { renderSidebar(); icon.className='bi bi-arrow-clockwise'; return; }
   try {
-    const res  = await fetch('/api/telegram/topics');
-    const data = await res.json();
-    if (data.topics) tgTopics = data.topics;
-    else showToast(data.msg || 'خطا در دریافت Topics', 'danger');
-  } catch { showToast('خطای شبکه', 'danger'); }
+    const d = await (await fetch('/api/telegram/topics')).json();
+    if (d.topics) tgTopics = d.topics;
+    else showToast(d.msg||'خطا','danger');
+  } catch { showToast('خطای شبکه','danger'); }
   renderSidebar();
   icon.className = 'bi bi-arrow-clockwise';
 }
-
 function openCreateTopic() {
-  if (!tgOk)    { showToast('ابتدا وارد تلگرام شو', 'warning'); return; }
-  if (!forumOk) { showToast('pip install --upgrade telethon', 'warning'); return; }
+  if (!tgOk)    { showToast('ابتدا وارد تلگرام شو','warning'); return; }
+  if (!forumOk) { showToast('pip install --upgrade telethon','warning'); return; }
   document.getElementById('newTopicTitle').value = '';
   createMdl.show();
-  setTimeout(() => document.getElementById('newTopicTitle').focus(), 300);
+  setTimeout(()=>document.getElementById('newTopicTitle').focus(),300);
 }
-
 async function doCreateTopic() {
-  const title = document.getElementById('newTopicTitle').value.trim();
-  if (!title) return;
+  const title = document.getElementById('newTopicTitle').value.trim(); if (!title) return;
   const btn = document.getElementById('createBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="bi bi-hourglass-split spin me-1"></i>در حال ساخت…';
+  btn.disabled=true; btn.innerHTML='<i class="bi bi-hourglass-split spin me-1"></i>در حال ساخت…';
   try {
-    const res  = await fetch('/api/telegram/topics', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({title})
-    });
-    const data = await res.json();
-    if (data.ok && data.topic_id) {
-      tgTopics.unshift({id: data.topic_id, title: data.title});
-      createMdl.hide();
-      renderSidebar();
-      selectTopic(data.topic_id);
-      showToast(`Topic «${data.title}» ساخته شد ✓`, 'success');
-    } else {
-      showToast(data.msg || 'خطا در ساخت Topic', 'danger');
-    }
-  } catch { showToast('خطای شبکه', 'danger'); }
-  btn.disabled = false;
-  btn.innerHTML = '<i class="bi bi-telegram me-1"></i>ساخت در تلگرام';
+    const d = await (await fetch('/api/telegram/topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})})).json();
+    if (d.ok && d.topic_id) {
+      tgTopics.unshift({id:d.topic_id,title:d.title});
+      createMdl.hide(); renderSidebar(); selectTopic(d.topic_id);
+      showToast(`Topic «${d.title}» ساخته شد ✓`,'success');
+    } else showToast(d.msg||'خطا','danger');
+  } catch { showToast('خطای شبکه','danger'); }
+  btn.disabled=false; btn.innerHTML='<i class="bi bi-telegram me-1"></i>ساخت در تلگرام';
 }
-
-function selectTopic(id) { selId = id; renderSidebar(); renderMain(); }
+function selectTopic(id) { selId=id; renderSidebar(); renderTopicDetail(); }
 
 // ═══════════════════════════════════════════════════════
 //  Sources & Filters
 // ═══════════════════════════════════════════════════════
-function ensureCfg(id) { if (!cfgMap[id]) cfgMap[id] = {sources:[]}; return cfgMap[id]; }
-
+function ensureCfg(id) { if (!cfgMap[id]) cfgMap[id]={sources:[]}; return cfgMap[id]; }
 function addSource() {
-  ensureCfg(selId).sources.push({chat:'', filters:[]});
-  renderMain(); markDirty();
-  setTimeout(() => { const inp = document.querySelectorAll('.src-top input'); if(inp.length) inp[inp.length-1].focus(); }, 50);
+  ensureCfg(selId).sources.push({chat:'',filters:[]});
+  renderTopicDetail(); markDirty();
+  setTimeout(()=>{ const inp=document.querySelectorAll('.src-top input'); if(inp.length) inp[inp.length-1].focus(); },50);
 }
-function deleteSource(si) { ensureCfg(selId).sources.splice(si,1); renderMain(); markDirty(); }
-function updateChat(si,val) { ensureCfg(selId).sources[si].chat = val; markDirty(); }
-
-function onFilterKey(e, si) {
-  if (e.key !== 'Enter') return;
-  const phrase = e.target.value.trim(); if (!phrase) return;
-  ensureCfg(selId).sources[si].filters.push(phrase);
-  e.target.value = '';
-  renderMain(); markDirty();
-  setTimeout(() => { const inp = document.querySelectorAll('.filter-input'); if(inp[si]) inp[si].focus(); }, 40);
+function deleteSource(si) { ensureCfg(selId).sources.splice(si,1); renderTopicDetail(); markDirty(); }
+function updateChat(si,val) { ensureCfg(selId).sources[si].chat=val; markDirty(); }
+function onFilterKey(e,si) {
+  if (e.key!=='Enter') return;
+  const phrase=e.target.value.trim(); if(!phrase) return;
+  ensureCfg(selId).sources[si].filters.push(phrase); e.target.value='';
+  renderTopicDetail(); markDirty();
+  setTimeout(()=>{ const inp=document.querySelectorAll('.filter-input'); if(inp[si]) inp[si].focus(); },40);
 }
-function deleteFilter(si,fi) { ensureCfg(selId).sources[si].filters.splice(fi,1); renderMain(); markDirty(); }
+function deleteFilter(si,fi) { ensureCfg(selId).sources[si].filters.splice(fi,1); renderTopicDetail(); markDirty(); }
 
 // ═══════════════════════════════════════════════════════
 //  Save
 // ═══════════════════════════════════════════════════════
 async function saveAll() {
   const topics = [];
-  for (const [idStr, data] of Object.entries(cfgMap)) {
-    if (data.sources?.length > 0) {
-      const id = parseInt(idStr);
-      const tgt = tgTopics.find(t => t.id === id);
-      topics.push({ topic_id: id, name: tgt?.title || '', sources: data.sources });
+  for (const [idStr,data] of Object.entries(cfgMap)) {
+    if (data.sources?.length>0) {
+      const id=parseInt(idStr); const tgt=tgTopics.find(t=>t.id===id);
+      topics.push({topic_id:id, name:tgt?.title||'', sources:data.sources});
     }
   }
-  await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({...apiCfg, topics}) });
+  const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...apiCfg,topics})});
+  const d   = await res.json();
   markClean();
-  showToast('تغییرات ذخیره شد ✓', 'success');
+  showToast(d.restarted ? 'ذخیره شد — Bot ری‌استارت شد ✓' : 'تغییرات ذخیره شد ✓', 'success');
 }
 
 // ═══════════════════════════════════════════════════════
-//  Render: Sidebar
+//  Render
 // ═══════════════════════════════════════════════════════
 function renderSidebar() {
   const el = document.getElementById('topicList');
   if (!tgOk) {
-    el.innerHTML = `<div class="sidebar-msg">
-      <i class="bi bi-plug-fill" style="color:#fca5a5"></i>
-      وارد تلگرام نشدی.<br>روی بج قرمز بالا کلیک کن.
-    </div>`; return;
+    el.innerHTML=`<div class="sidebar-msg"><i class="bi bi-plug-fill" style="color:#fca5a5"></i>روی بج قرمز بالا کلیک کن.</div>`;return;
   }
   if (!forumOk) {
-    el.innerHTML = `<div class="sidebar-msg">
-      <i class="bi bi-exclamation-triangle-fill" style="color:#fde68a"></i>
-      نسخه Telethon قدیمی است.<br><code>pip install --upgrade telethon</code>
-    </div>`; return;
+    el.innerHTML=`<div class="sidebar-msg"><i class="bi bi-exclamation-triangle-fill" style="color:#fde68a"></i><code>pip install --upgrade telethon</code></div>`;return;
   }
   if (!tgTopics.length) {
-    el.innerHTML = `<div class="sidebar-msg">
-      <i class="bi bi-inbox"></i>
-      گروه Topic ندارد یا هنوز Sync نشده.
-    </div>`; return;
+    el.innerHTML=`<div class="sidebar-msg"><i class="bi bi-inbox"></i>گروه Topic ندارد.</div>`;return;
   }
   el.innerHTML = tgTopics.map(t => {
-    const cnt = cfgMap[t.id]?.sources?.length || 0;
+    const cnt = cfgMap[t.id]?.sources?.length||0;
     return `<div class="topic-row ${t.id===selId?'active':''}" onclick="selectTopic(${t.id})">
       <div style="overflow:hidden;flex:1">
         <div class="t-name">${esc(t.title)}</div>
         <div class="t-meta">ID: ${t.id}</div>
       </div>
-      <span class="t-src-badge ${cnt?'':'empty'}">${cnt ? cnt+' سورس' : 'بدون سورس'}</span>
+      <span class="t-src-badge ${cnt?'':'empty'}">${cnt?cnt+' سورس':'بدون سورس'}</span>
     </div>`;
   }).join('');
 }
 
-// ═══════════════════════════════════════════════════════
-//  Render: Main
-// ═══════════════════════════════════════════════════════
-function renderMain() {
-  const el = document.getElementById('mainPanel');
-  if (!selId) {
-    el.innerHTML = `<div class="empty-state"><i class="bi bi-ui-checks-grid"></i><h5>یک Topic انتخاب کن</h5></div>`;
-    return;
-  }
-  const tgt     = tgTopics.find(t => t.id === selId);
+function renderTopicDetail() {
+  const dash   = document.getElementById('botDash');
+  const detail = document.getElementById('topicDetail');
+
+  if (!selId) { dash.style.display=''; detail.style.display='none'; return; }
+  dash.style.display='none'; detail.style.display='';
+
+  const tgt     = tgTopics.find(t=>t.id===selId);
   const title   = tgt ? tgt.title : `Topic ${selId}`;
   const sources = cfgMap[selId]?.sources || [];
 
-  el.innerHTML = `
+  detail.innerHTML = `
     <div class="topic-hdr">
       <div class="topic-hdr-icon"><i class="bi bi-hash"></i></div>
       <div>
         <div class="topic-hdr-title">${esc(title)}</div>
         <div class="topic-hdr-id">Topic ID: ${selId}</div>
       </div>
+      <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" style="border-radius:8px;font-size:.78rem"
+        onclick="selId=null;renderSidebar();renderTopicDetail()">
+        <i class="bi bi-grid me-1"></i>داشبورد
+      </button>
     </div>
     <div class="sec-head">
       <h6><i class="bi bi-broadcast-pin"></i> سورس‌ها</h6>
@@ -688,7 +755,7 @@ function renderMain() {
         <i class="bi bi-plus-lg me-1"></i>افزودن سورس
       </button>
     </div>
-    ${sources.length === 0 ? `<div class="no-sources"><i class="bi bi-inbox"></i>هنوز سورسی اضافه نشده.</div>`
+    ${sources.length===0 ? `<div class="no-sources"><i class="bi bi-inbox"></i>هنوز سورسی اضافه نشده.</div>`
     : sources.map((src,si) => `
       <div class="source-card">
         <div class="src-top">
@@ -699,47 +766,29 @@ function renderMain() {
         </div>
         <div class="filter-area">
           <span class="filter-lbl">فیلترها:</span>
-          ${(src.filters||[]).map((f,fi)=>`
-            <span class="filter-tag">${esc(f)}
-              <button onclick="deleteFilter(${si},${fi})"><i class="bi bi-x"></i></button>
-            </span>`).join('')}
-          ${!(src.filters||[]).length ? `<span class="all-badge"><i class="bi bi-asterisk me-1"></i>همه پیام‌ها</span>` : ''}
+          ${(src.filters||[]).map((f,fi)=>`<span class="filter-tag">${esc(f)}<button onclick="deleteFilter(${si},${fi})"><i class="bi bi-x"></i></button></span>`).join('')}
+          ${!(src.filters||[]).length?`<span class="all-badge"><i class="bi bi-asterisk me-1"></i>همه پیام‌ها</span>`:''}
           <input class="filter-input" placeholder="عبارت جدید…  Enter" onkeydown="onFilterKey(event,${si})">
         </div>
       </div>`).join('')}
-    ${sources.length>0 ? `<button class="btn-add-src" onclick="addSource()"><i class="bi bi-plus-circle"></i> افزودن سورس دیگر</button>` : ''}
+    ${sources.length>0?`<button class="btn-add-src" onclick="addSource()"><i class="bi bi-plus-circle"></i> افزودن سورس دیگر</button>`:''}
   `;
 }
 
 // ═══════════════════════════════════════════════════════
 //  Utils
 // ═══════════════════════════════════════════════════════
-function buildCfgMap(topics) {
-  const m={};
-  for(const t of topics) m[t.topic_id]={sources:t.sources||[]};
-  return m;
-}
-function markDirty() {
-  const b=document.getElementById('saveBtn');
-  b.className='btn-save dirty';
-  b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات *';
-}
-function markClean() {
-  const b=document.getElementById('saveBtn');
-  b.className='btn-save';
-  b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات';
-}
-function showToast(msg, type='success') {
+function buildCfgMap(topics) { const m={}; for(const t of topics) m[t.topic_id]={sources:t.sources||[]}; return m; }
+function markDirty() { const b=document.getElementById('saveBtn'); b.className='btn-save dirty'; b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات *'; }
+function markClean() { const b=document.getElementById('saveBtn'); b.className='btn-save'; b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات'; }
+function showToast(msg,type='success') {
   const b=document.getElementById('toastBox');
-  const c={success:'#16a34a',danger:'#dc2626',warning:'#d97706'};
-  b.style.background = c[type]||'#1e40af';
-  b.textContent = msg;
-  b.style.display = 'block';
-  setTimeout(()=>b.style.display='none', 3000);
+  b.style.background={success:'#16a34a',danger:'#dc2626',warning:'#d97706'}[type]||'#1e40af';
+  b.textContent=msg; b.style.display='block';
+  setTimeout(()=>b.style.display='none',3000);
 }
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escHtml(s) { return esc(s); }
 </script>
 </body>
 </html>
