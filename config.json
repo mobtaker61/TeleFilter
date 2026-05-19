@@ -1,19 +1,45 @@
 {
-  "api_id": 36209056,
   "api_hash": "bd56122e61f85d30e4c559689f29c43e",
+  "api_id": 36209056,
   "target_group_id": -1003964412419,
   "topics": [
     {
       "name": "دلار",
-      "topic_id": 4,
       "sources": [
         {
           "chat": "@toofan_harirod",
-          "filters": ["نقدی", "USD", "دلار"]
+          "filters": [
+            "نقدی",
+            "USD",
+            "دلار"
+          ]
         },
         {
+          "chat": "@tahran_sabza",
+          "filters": [
+            "نـــقـدی"
+          ]
+        },
+        {
+          "chat": "@mtotonchi_uae",
+          "filters": []
+        }
+      ],
+      "topic_id": 4
+    },
+    {
+      "name": "درهم",
+      "topic_id": 8,
+      "sources": [
+        {
           "chat": "@Dirham_rate",
-          "filters": ["دلار", "USD"]
+          "filters": [
+            "درهم"
+          ]
+        },
+        {
+          "chat": "@DERHAMHSD12",
+          "filters": []
         }
       ]
     }
