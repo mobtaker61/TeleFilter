@@ -107,8 +107,12 @@ def get_tg_topics():
                         'msg': 'target_group_id در تنظیمات وارد نشده'}), 400
     try:
         result = tg_run(_tg(GetForumTopicsRequest(
-            channel=gid, offset_date=0, offset_id=0,
-            offset_topic=0, limit=100, q=''
+            peer=gid,
+            offset_date=None,
+            offset_id=0,
+            offset_topic=0,
+            limit=100,
+            q=None
         )))
         topics = [{'id': t.id, 'title': t.title} for t in result.topics]
         return jsonify({'topics': topics})
@@ -135,7 +139,7 @@ def create_tg_topic():
         return jsonify({'error': 'no_group', 'msg': 'target_group_id وارد نشده'}), 400
     try:
         result = tg_run(_tg(CreateForumTopicRequest(
-            channel=gid,
+            peer=gid,
             title=title,
             random_id=random.randint(1, 2**31)
         )))

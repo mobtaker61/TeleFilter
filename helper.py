@@ -47,12 +47,12 @@ async def list_topics():
 
     try:
         result = await client(GetForumTopicsRequest(
-            channel=group_id,
-            offset_date=0,
+            peer=group_id,
+            offset_date=None,
             offset_id=0,
             offset_topic=0,
             limit=100,
-            q=''
+            q=None
         ))
         print("\n" + "=" * 65)
         print(f"{'عنوان Topic':<45} {'ID'}")
