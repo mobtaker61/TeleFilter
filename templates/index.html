@@ -185,6 +185,32 @@
     .toast-box  { color: #fff; border-radius: 12px; padding: .6rem 1.4rem; font-size: .84rem;
       text-align: center; display: none; box-shadow: 0 4px 20px rgba(0,0,0,.2); }
 
+    /* ── Setup Wizard ─────────────────────────── */
+    .setup-step-item { display:flex;flex-direction:column;align-items:center;gap:.3rem;flex:1; }
+    .setup-step-num  { width:32px;height:32px;border-radius:50%;background:#e2e8f0;color:#94a3b8;
+      font-size:.8rem;font-weight:700;display:flex;align-items:center;justify-content:center;
+      transition:all .3s; }
+    .setup-step-item.active .setup-step-num { background:#2563eb;color:#fff; }
+    .setup-step-item.done .setup-step-num   { background:#16a34a;color:#fff; }
+    .setup-step-lbl  { font-size:.72rem;color:#94a3b8;text-align:center;white-space:nowrap; }
+    .setup-step-item.active .setup-step-lbl { color:#2563eb;font-weight:600; }
+    .setup-step-sep  { flex:1;height:2px;background:#e2e8f0;margin-top:16px;transition:background .3s; }
+    .setup-step-sep.done { background:#16a34a; }
+
+    .setup-panel { display:none; }
+    .setup-panel.active { display:block; }
+    .setup-instruction { background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:14px;padding:1.25rem 1.4rem; }
+    .setup-step-badge { display:inline-block;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;
+      border-radius:20px;padding:2px 12px;font-size:.75rem;font-weight:600; }
+    .setup-link-btn { display:inline-flex;align-items:center;background:#2563eb;color:#fff;border-radius:10px;
+      padding:.55rem 1.2rem;font-size:.87rem;font-weight:600;text-decoration:none;margin-top:.75rem;transition:background .15s; }
+    .setup-link-btn:hover { background:#1d4ed8;color:#fff; }
+    .setup-note { background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:.7rem 1rem;font-size:.82rem;color:#475569; }
+    .setup-steps-list { display:flex;flex-direction:column;gap:.75rem; }
+    .setup-step-row { display:flex;align-items:flex-start;gap:.75rem;font-size:.87rem;color:#475569;line-height:1.6; }
+    .setup-step-circle { width:24px;height:24px;border-radius:50%;background:#2563eb;color:#fff;
+      font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px; }
+
     /* ── Misc ─────────────────────────────────── */
     .spin { animation: spin .7s linear infinite; display: inline-block; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -278,6 +304,144 @@
 
       <!-- جزئیات Topic -->
       <div id="topicDetail" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: Setup Wizard ════════════════════════════════ -->
+<div class="modal fade" id="setupModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content" style="border-radius:20px">
+      <div class="modal-body p-0" style="overflow:hidden;border-radius:20px">
+
+        <!-- Header gradient -->
+        <div style="background:linear-gradient(135deg,#1e40af,#2563eb);padding:2rem 2rem 1.5rem;color:#fff">
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
+            <div style="width:48px;height:48px;background:rgba(255,255,255,.15);border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.5rem">
+              <i class="bi bi-telegram"></i>
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:1.2rem">TeleFilter — راه‌اندازی اولیه</div>
+              <div style="font-size:.82rem;opacity:.8">برای شروع، API تلگرام را وارد کن</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:1.75rem 2rem">
+
+          <!-- Steps indicator -->
+          <div style="display:flex;gap:0;margin-bottom:1.75rem">
+            <div class="setup-step-item active" id="sstep1">
+              <div class="setup-step-num">۱</div>
+              <div class="setup-step-lbl">ورود به my.telegram.org</div>
+            </div>
+            <div class="setup-step-sep"></div>
+            <div class="setup-step-item" id="sstep2">
+              <div class="setup-step-num">۲</div>
+              <div class="setup-step-lbl">ساخت اپلیکیشن</div>
+            </div>
+            <div class="setup-step-sep"></div>
+            <div class="setup-step-item" id="sstep3">
+              <div class="setup-step-num">۳</div>
+              <div class="setup-step-lbl">وارد کردن API</div>
+            </div>
+          </div>
+
+          <!-- Step 1 -->
+          <div class="setup-panel active" id="spanel1">
+            <div class="setup-instruction">
+              <div class="setup-step-badge">مرحله ۱</div>
+              <h6 class="mt-2 mb-3" style="font-weight:700;color:#1e293b">وارد سایت رسمی تلگرام شو</h6>
+              <p style="color:#475569;font-size:.9rem;line-height:1.8">
+                آدرس زیر را در مرورگر باز کن و با شماره تلفن تلگرامت وارد شو.
+                این سایت همان سایت رسمی تلگرام است و اطلاعاتت کاملاً امن است.
+              </p>
+              <a href="https://my.telegram.org" target="_blank" class="setup-link-btn">
+                <i class="bi bi-box-arrow-up-left me-2"></i>
+                my.telegram.org را باز کن
+              </a>
+              <div class="setup-note mt-3">
+                <i class="bi bi-info-circle-fill me-2" style="color:#3b82f6"></i>
+                <strong>نکته:</strong> API به اپلیکیشن تعلق دارد، نه به شماره. یعنی هر حسابی می‌تواند با همین API وارد شود — لازم نیست API با شماره‌ای که لاگین می‌کنی یکی باشد.
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2 -->
+          <div class="setup-panel" id="spanel2">
+            <div class="setup-instruction">
+              <div class="setup-step-badge">مرحله ۲</div>
+              <h6 class="mt-2 mb-3" style="font-weight:700;color:#1e293b">اپلیکیشن جدید بساز</h6>
+              <div class="setup-steps-list">
+                <div class="setup-step-row">
+                  <div class="setup-step-circle">۱</div>
+                  <div>بعد از ورود، روی گزینه <strong>«API development tools»</strong> کلیک کن</div>
+                </div>
+                <div class="setup-step-row">
+                  <div class="setup-step-circle">۲</div>
+                  <div>فرمی باز می‌شود — <strong>App title</strong> را پر کن (هر اسمی دلخواه، مثل TeleFilter)</div>
+                </div>
+                <div class="setup-step-row">
+                  <div class="setup-step-circle">۳</div>
+                  <div><strong>Short name</strong> را هم پر کن (فقط حروف انگلیسی کوچک، بدون فاصله)</div>
+                </div>
+                <div class="setup-step-row">
+                  <div class="setup-step-circle">۴</div>
+                  <div>روی <strong>«Create application»</strong> کلیک کن</div>
+                </div>
+              </div>
+              <div class="setup-note mt-3">
+                <i class="bi bi-shield-check-fill me-2" style="color:#16a34a"></i>
+                <strong>Platform</strong> و <strong>URL</strong> را خالی بگذار — اجباری نیستند.
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3 -->
+          <div class="setup-panel" id="spanel3">
+            <div class="setup-instruction">
+              <div class="setup-step-badge">مرحله ۳</div>
+              <h6 class="mt-2 mb-3" style="font-weight:700;color:#1e293b">API ID و API Hash را وارد کن</h6>
+              <p style="color:#475569;font-size:.88rem;margin-bottom:1.2rem">
+                بعد از ساخت اپلیکیشن، تلگرام یک <strong>api_id</strong> (عدد) و یک <strong>api_hash</strong> (رشته) به تو می‌دهد. آن‌ها را اینجا وارد کن:
+              </p>
+              <div class="mb-3">
+                <label class="form-label">API ID <span style="color:#ef4444">*</span></label>
+                <input type="text" class="form-control" id="setup_api_id" dir="ltr"
+                  placeholder="مثال: 12345678"
+                  oninput="checkSetupReady()">
+                <div class="form-text">یک عدد ۷ تا ۸ رقمی</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">API Hash <span style="color:#ef4444">*</span></label>
+                <input type="text" class="form-control font-monospace" id="setup_api_hash" dir="ltr"
+                  placeholder="مثال: 0123456789abcdef0123456789abcdef"
+                  oninput="checkSetupReady()">
+                <div class="form-text">یک رشته ۳۲ کاراکتری</div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Target Group ID <span style="color:#94a3b8;font-weight:400">(اختیاری — بعداً هم می‌توانی وارد کنی)</span></label>
+                <input type="text" class="form-control" id="setup_group_id" dir="ltr"
+                  placeholder="مثال: -1001234567890">
+                <div class="form-text">ID گروهی که Forum Topics دارد</div>
+              </div>
+              <div class="login-error" id="setupErr" style="margin-top:.75rem"></div>
+            </div>
+          </div>
+
+          <!-- Navigation buttons -->
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid #f1f5f9">
+            <button class="btn btn-outline-secondary btn-sm" id="setupBackBtn" style="border-radius:9px;display:none" onclick="setupNav(-1)">
+              <i class="bi bi-arrow-right me-1"></i> قبلی
+            </button>
+            <div></div>
+            <button class="btn btn-primary" id="setupNextBtn" style="border-radius:10px;padding:.5rem 1.5rem" onclick="setupNav(1)">
+              بعدی <i class="bi bi-arrow-left ms-1"></i>
+            </button>
+          </div>
+
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -401,7 +565,7 @@
 let tgTopics = [], cfgMap = {}, apiCfg = {}, selId = null;
 let tgOk = false, forumOk = false, botStatus = 'stopped';
 let logPollerTimer = null;
-let loginMdl, settingsMdl, createMdl;
+let loginMdl, settingsMdl, createMdl, setupMdl;
 
 // ═══════════════════════════════════════════════════════
 //  Boot
@@ -410,19 +574,113 @@ document.addEventListener('DOMContentLoaded', async () => {
   loginMdl    = new bootstrap.Modal(document.getElementById('loginModal'));
   settingsMdl = new bootstrap.Modal(document.getElementById('settingsModal'));
   createMdl   = new bootstrap.Modal(document.getElementById('createModal'));
+  setupMdl    = new bootstrap.Modal(document.getElementById('setupModal'));
 
-  await refreshStatus();
   const cfg = await (await fetch('/api/config')).json();
   apiCfg = { api_id: cfg.api_id||'', api_hash: cfg.api_hash||'', target_group_id: cfg.target_group_id||'' };
   cfgMap = buildCfgMap(cfg.topics || []);
 
+  // اگر API وارد نشده، wizard نشان بده
+  if (!apiCfg.api_id || !apiCfg.api_hash) {
+    setupStep = 1;
+    renderSetupStep();
+    setupMdl.show();
+    return;   // بقیه boot بعد از تکمیل wizard
+  }
+
+  await bootMain();
+});
+
+async function bootMain() {
+  await refreshStatus();
   if (tgOk) await syncTopics();
   else renderSidebar();
-
   markClean();
   startLogPoller();
-  setInterval(refreshStatus, 4000);   // poll status every 4 s
-});
+  setInterval(refreshStatus, 4000);
+}
+
+// ═══════════════════════════════════════════════════════
+//  Setup Wizard
+// ═══════════════════════════════════════════════════════
+let setupStep = 1;
+
+function renderSetupStep() {
+  [1,2,3].forEach(i => {
+    document.getElementById(`spanel${i}`).classList.toggle('active', i === setupStep);
+    const si = document.getElementById(`sstep${i}`);
+    si.classList.toggle('active', i === setupStep);
+    si.classList.toggle('done', i < setupStep);
+  });
+  // separators
+  document.querySelectorAll('.setup-step-sep').forEach((el, idx) => {
+    el.classList.toggle('done', setupStep > idx + 1);
+  });
+
+  const backBtn = document.getElementById('setupBackBtn');
+  const nextBtn = document.getElementById('setupNextBtn');
+  backBtn.style.display = setupStep > 1 ? 'inline-flex' : 'none';
+
+  if (setupStep === 3) {
+    nextBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i> ذخیره و شروع';
+  } else {
+    nextBtn.innerHTML = 'بعدی <i class="bi bi-arrow-left ms-1"></i>';
+  }
+  checkSetupReady();
+}
+
+function checkSetupReady() {
+  if (setupStep !== 3) return;
+  const ok = document.getElementById('setup_api_id').value.trim() &&
+             document.getElementById('setup_api_hash').value.trim();
+  document.getElementById('setupNextBtn').disabled = !ok;
+}
+
+async function setupNav(dir) {
+  if (setupStep === 3 && dir === 1) {
+    await doSetupSave();
+    return;
+  }
+  setupStep = Math.max(1, Math.min(3, setupStep + dir));
+  renderSetupStep();
+}
+
+async function doSetupSave() {
+  const api_id   = document.getElementById('setup_api_id').value.trim();
+  const api_hash = document.getElementById('setup_api_hash').value.trim();
+  const group_id = document.getElementById('setup_group_id').value.trim();
+
+  const errEl = document.getElementById('setupErr');
+  errEl.style.display = 'none';
+
+  if (!api_id || !api_hash) {
+    errEl.textContent = 'API ID و API Hash الزامی هستند';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('setupNextBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-hourglass-split spin me-1"></i> در حال ذخیره…';
+
+  try {
+    apiCfg = { api_id, api_hash, target_group_id: group_id };
+    const payload = { ...apiCfg, topics: [] };
+    await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    setupMdl.hide();
+    showToast('API ذخیره شد — خوش آمدی! ✓', 'success');
+    await bootMain();
+  } catch {
+    errEl.textContent = 'خطا در ذخیره — دوباره تلاش کن';
+    errEl.style.display = 'block';
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i> ذخیره و شروع';
+  }
+}
 
 // ═══════════════════════════════════════════════════════
 //  Status polling
