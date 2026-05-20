@@ -105,6 +105,24 @@ async def setup():
                 logger.error(f"  [{topic_name}] Could not resolve '{chat}': {e}")
 
 
+def _matches_filters(text: str, filters: list) -> bool:
+    """
+    filters می‌تواند دو فرمت داشته باشد:
+      • قدیمی (backward-compat): ["عبارت۱", "عبارت۲"]
+        → هر کدام باشد (OR)
+      • جدید: [["عبارت۱", "عبارت۲"], ["عبارت۳"]]
+        → هر rule یک AND-group است؛ بین rule‌ها OR است
+    """
+    if not filters:
+        return True   # بدون فیلتر = همه پیام‌ها
+    for rule in filters:
+        if isinstance(rule, str):
+            rule = [rule]          # backward-compat
+        if all(phrase.lower() in text for phrase in rule):
+            return True            # این rule match شد → فوروارد
+    return False
+
+
 @client.on(events.NewMessage())
 async def forward_handler(event):
     entries = source_map.get(event.chat_id)
@@ -114,9 +132,7 @@ async def forward_handler(event):
     text = (event.message.text or event.message.message or '').lower()
 
     for topic_id, filters in entries:
-        # اگر فیلتری نداشت → همه پیام‌ها فوروارد شوند
-        # اگر فیلتر داشت → فقط اگر حداقل یک عبارت در پیام پیدا شود
-        if filters and not any(f.lower() in text for f in filters):
+        if not _matches_filters(text, filters):
             continue
 
         try:

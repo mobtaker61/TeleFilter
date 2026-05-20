@@ -138,8 +138,16 @@
     .src-del { background: none; border: none; color: #e2e8f0; cursor: pointer;
       padding: 3px 6px; border-radius: 6px; flex-shrink: 0; font-size: 1rem; transition: all .15s; }
     .src-del:hover { color: #ef4444; background: #fef2f2; }
-    .filter-area { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; padding-top: .2rem; }
-    .filter-lbl { font-size: .74rem; color: #94a3b8; flex-shrink: 0; }
+    /* ── Filter Rules ─────────────────────────── */
+    .filter-rules-wrap { padding-top: .35rem; }
+    .filter-rules-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .45rem; }
+    .filter-lbl { font-size: .74rem; color: #94a3b8; }
+    .filter-lbl small { opacity: .75; }
+    .rule-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-bottom: .3rem; }
+    .rule-or-badge { font-size: .68rem; color: #94a3b8; background: #f1f5f9;
+      border-radius: 10px; padding: 1px 7px; margin-left: 2px; flex-shrink: 0; }
+    .rule-and-badge { font-size: .65rem; color: #64748b; background: #f8fafc;
+      border: 1px solid #e2e8f0; border-radius: 10px; padding: 1px 6px; flex-shrink: 0; }
     .filter-tag { display: inline-flex; align-items: center; gap: 3px; background: #eff6ff;
       color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 20px; padding: 3px 8px 3px 5px; font-size: .79rem; }
     .filter-tag button { background: none; border: none; color: #93c5fd; cursor: pointer; padding: 0; font-size: .7rem; line-height: 1; }
@@ -148,9 +156,16 @@
       border-radius: 20px; padding: 3px 10px; font-size: .77rem; }
     .filter-input { border: 1.5px dashed #93c5fd; border-radius: 20px; padding: 3px 12px;
       font-size: .79rem; font-family: 'Vazirmatn', sans-serif; outline: none;
-      width: 145px; background: #f8fafc; transition: border .15s, background .15s; }
+      width: 130px; background: #f8fafc; transition: border .15s, background .15s; }
     .filter-input:focus { border-color: #2563eb; background: #fff; }
     .filter-input::placeholder { color: #94a3b8; }
+    .btn-del-rule { background: none; border: none; color: #cbd5e1; cursor: pointer;
+      padding: 2px 5px; border-radius: 5px; font-size: .8rem; transition: all .15s; flex-shrink: 0; }
+    .btn-del-rule:hover { color: #ef4444; background: #fef2f2; }
+    .btn-add-rule { background: none; border: 1.5px dashed #e2e8f0; border-radius: 20px;
+      color: #94a3b8; padding: 2px 11px; font-size: .76rem; cursor: pointer;
+      font-family: 'Vazirmatn', sans-serif; transition: all .15s; }
+    .btn-add-rule:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
     .no-sources { text-align: center; padding: 2rem; color: #94a3b8; font-size: .85rem; }
     .no-sources i { font-size: 2.5rem; opacity: .3; display: block; margin-bottom: .5rem; }
     .btn-add-src { background: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 12px;
@@ -925,21 +940,86 @@ function selectTopic(id) { selId=id; renderSidebar(); renderTopicDetail(); }
 //  Sources & Filters
 // ═══════════════════════════════════════════════════════
 function ensureCfg(id) { if (!cfgMap[id]) cfgMap[id]={sources:[]}; return cfgMap[id]; }
+
 function addSource() {
-  ensureCfg(selId).sources.push({chat:'',filters:[]});
+  ensureCfg(selId).sources.push({chat:'', filters:[]});
   renderTopicDetail(); markDirty();
   setTimeout(()=>{ const inp=document.querySelectorAll('.src-top input'); if(inp.length) inp[inp.length-1].focus(); },50);
 }
 function deleteSource(si) { ensureCfg(selId).sources.splice(si,1); renderTopicDetail(); markDirty(); }
 function updateChat(si,val) { ensureCfg(selId).sources[si].chat=val; markDirty(); }
-function onFilterKey(e,si) {
-  if (e.key!=='Enter') return;
-  const phrase=e.target.value.trim(); if(!phrase) return;
-  ensureCfg(selId).sources[si].filters.push(phrase); e.target.value='';
+
+// هر rule یک آرایه از عبارات است (AND). بین rule‌ها OR است.
+function addFilterRule(si) {
+  ensureCfg(selId).sources[si].filters.push([]);
   renderTopicDetail(); markDirty();
-  setTimeout(()=>{ const inp=document.querySelectorAll('.filter-input'); if(inp[si]) inp[si].focus(); },40);
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll(`.filter-input[data-si="${si}"]`);
+    if(inputs.length) inputs[inputs.length-1].focus();
+  }, 50);
 }
-function deleteFilter(si,fi) { ensureCfg(selId).sources[si].filters.splice(fi,1); renderTopicDetail(); markDirty(); }
+function deleteFilterRule(si, ri) {
+  ensureCfg(selId).sources[si].filters.splice(ri, 1);
+  renderTopicDetail(); markDirty();
+}
+function onPhraseKey(e, si, ri) {
+  if (e.key !== 'Enter') return;
+  const phrase = e.target.value.trim(); if (!phrase) return;
+  ensureCfg(selId).sources[si].filters[ri].push(phrase);
+  e.target.value = '';
+  renderTopicDetail(); markDirty();
+  setTimeout(()=>{
+    const inputs = document.querySelectorAll(`.filter-input[data-si="${si}"][data-ri="${ri}"]`);
+    if(inputs.length) inputs[0].focus();
+  }, 40);
+}
+function deletePhrase(si, ri, pi) {
+  const rule = ensureCfg(selId).sources[si].filters[ri];
+  rule.splice(pi, 1);
+  if (rule.length === 0) {
+    ensureCfg(selId).sources[si].filters.splice(ri, 1);
+  }
+  renderTopicDetail(); markDirty();
+}
+
+function renderFilterRules(si, filters) {
+  if (!filters || filters.length === 0) {
+    return `<div class="filter-rules-wrap">
+      <div class="rule-row">
+        <span class="all-badge"><i class="bi bi-asterisk me-1"></i>همه پیام‌ها</span>
+        <button class="btn-add-rule" onclick="addFilterRule(${si})"><i class="bi bi-plus me-1"></i>افزودن فیلتر</button>
+      </div>
+    </div>`;
+  }
+  const rulesHtml = filters.map((rule, ri) => {
+    const phrases = rule.map((phrase, pi) =>
+      `<span class="filter-tag">${esc(phrase)}<button onclick="deletePhrase(${si},${ri},${pi})"><i class="bi bi-x"></i></button></span>`
+    ).join(ri > 0 || rule.indexOf(rule[0]) > 0 ? '' : '');
+    // AND badges between phrases
+    const phrasesWithAnd = rule.map((phrase, pi) =>
+      (pi > 0 ? `<span class="rule-and-badge">و</span>` : '') +
+      `<span class="filter-tag">${esc(phrase)}<button onclick="deletePhrase(${si},${ri},${pi})"><i class="bi bi-x"></i></button></span>`
+    ).join('');
+    return `
+      ${ri > 0 ? `<div class="rule-row"><span class="rule-or-badge">── یا ──</span></div>` : ''}
+      <div class="rule-row">
+        ${phrasesWithAnd}
+        <input class="filter-input" data-si="${si}" data-ri="${ri}"
+          placeholder="عبارت… Enter" onkeydown="onPhraseKey(event,${si},${ri})">
+        <button class="btn-del-rule" onclick="deleteFilterRule(${si},${ri})" title="حذف این قانون"><i class="bi bi-trash3"></i></button>
+      </div>`;
+  }).join('');
+
+  return `<div class="filter-rules-wrap">
+    <div class="filter-rules-head">
+      <span class="filter-lbl">قوانین فیلتر: <small>(داخل هر قانون = همه عبارات &nbsp;|&nbsp; بین قوانین = هر کدام)</small></span>
+    </div>
+    ${rulesHtml}
+    <div class="rule-row" style="margin-top:.3rem">
+      <button class="btn-add-rule" onclick="addFilterRule(${si})"><i class="bi bi-plus me-1"></i>قانون جدید (یا)</button>
+    </div>
+  </div>`;
+}
 
 // ═══════════════════════════════════════════════════════
 //  Save
@@ -1022,12 +1102,7 @@ function renderTopicDetail() {
             onchange="updateChat(${si},this.value)" placeholder="@username  یا  Chat ID">
           <button class="src-del" onclick="deleteSource(${si})"><i class="bi bi-x-circle-fill"></i></button>
         </div>
-        <div class="filter-area">
-          <span class="filter-lbl">فیلترها:</span>
-          ${(src.filters||[]).map((f,fi)=>`<span class="filter-tag">${esc(f)}<button onclick="deleteFilter(${si},${fi})"><i class="bi bi-x"></i></button></span>`).join('')}
-          ${!(src.filters||[]).length?`<span class="all-badge"><i class="bi bi-asterisk me-1"></i>همه پیام‌ها</span>`:''}
-          <input class="filter-input" placeholder="عبارت جدید…  Enter" onkeydown="onFilterKey(event,${si})">
-        </div>
+        ${renderFilterRules(si, src.filters||[])}
       </div>`).join('')}
     ${sources.length>0?`<button class="btn-add-src" onclick="addSource()"><i class="bi bi-plus-circle"></i> افزودن سورس دیگر</button>`:''}
   `;
@@ -1036,7 +1111,24 @@ function renderTopicDetail() {
 // ═══════════════════════════════════════════════════════
 //  Utils
 // ═══════════════════════════════════════════════════════
-function buildCfgMap(topics) { const m={}; for(const t of topics) m[t.topic_id]={sources:t.sources||[]}; return m; }
+function normalizeFilters(filters) {
+  // فرمت قدیمی: ["عبارت۱", "عبارت۲"] → [["عبارت۱"], ["عبارت۲"]]
+  // فرمت جدید: [["عبارت۱", "عبارت۲"], ["عبارت۳"]] → بدون تغییر
+  if (!filters || filters.length === 0) return [];
+  if (typeof filters[0] === 'string') return filters.map(f => [f]);
+  return filters;
+}
+function buildCfgMap(topics) {
+  const m = {};
+  for (const t of topics) {
+    const sources = (t.sources || []).map(s => ({
+      chat: s.chat || '',
+      filters: normalizeFilters(s.filters)
+    }));
+    m[t.topic_id] = { sources };
+  }
+  return m;
+}
 function markDirty() { const b=document.getElementById('saveBtn'); b.className='btn-save dirty'; b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات *'; }
 function markClean() { const b=document.getElementById('saveBtn'); b.className='btn-save'; b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات'; }
 function showToast(msg,type='success') {
