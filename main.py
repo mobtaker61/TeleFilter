@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 import logging
+import argparse
 from telethon import TelegramClient, events
 from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.utils import get_peer_id
@@ -13,10 +14,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-with open('config.json', 'r', encoding='utf-8') as f:
+parser = argparse.ArgumentParser()
+parser.add_argument('--config',  default='config.json',         help='path to user config.json')
+parser.add_argument('--session', default='telefilter_session',  help='path to telethon session file')
+args = parser.parse_args()
+
+with open(args.config, 'r', encoding='utf-8') as f:
     config = json.load(f)
 
-client = TelegramClient('telefilter_session', config['api_id'], config['api_hash'])
+client = TelegramClient(args.session, config['api_id'], config['api_hash'])
 
 # source_map: {peer_id: [(topic_id, [filter_phrases])]}
 # یک سورس می‌تواند در چند topic مختلف با فیلترهای متفاوت باشد

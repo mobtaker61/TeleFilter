@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -c \"from telethon.tl.functions import messages; print\\([x for x in dir\\(messages\\) if 'orum' in x or 'Topic' in x or 'forum' in x or 'topic' in x]\\)\")"
+    ]
+  }
+}

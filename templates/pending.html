@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeleFilter — در انتظار تأیید</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { font-family: 'Vazirmatn', sans-serif; box-sizing: border-box; }
+    body { background: linear-gradient(135deg, #0f172a, #1e3a8a); min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; }
+    .card { background: #fff; border-radius: 24px; padding: 2.5rem 2.25rem; max-width: 400px; width: 90%;
+      box-shadow: 0 30px 80px rgba(0,0,0,.4); text-align: center; }
+    .icon { width: 72px; height: 72px; background: #fef3c7; border-radius: 20px;
+      margin: 0 auto 1.25rem; display: flex; align-items: center; justify-content: center;
+      font-size: 2rem; }
+    h4 { font-weight: 700; color: #1e293b; margin-bottom: .5rem; }
+    .msg { color: #64748b; font-size: .9rem; line-height: 1.7; margin-bottom: 1.5rem; }
+    .user-info { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px;
+      padding: 1rem; display: flex; align-items: center; gap: .75rem; margin-bottom: 1.5rem; text-align: right; }
+    .avatar { width: 44px; height: 44px; border-radius: 50%; background: #e2e8f0;
+      display: flex; align-items: center; justify-content: center; font-size: 1.2rem;
+      color: #64748b; flex-shrink: 0; overflow: hidden; }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .user-name { font-weight: 600; color: #1e293b; font-size: .9rem; }
+    .user-id { font-size: .75rem; color: #94a3b8; }
+    .btn-check { width: 100%; border-radius: 12px; padding: .65rem; font-size: .9rem;
+      font-weight: 600; font-family: 'Vazirmatn', sans-serif; margin-bottom: .75rem; }
+    .btn-logout { background: none; border: 1.5px solid #e2e8f0; color: #64748b; font-size: .82rem;
+      border-radius: 10px; padding: .45rem .9rem; cursor: pointer; font-family: 'Vazirmatn', sans-serif;
+      transition: all .15s; }
+    .btn-logout:hover { border-color: #ef4444; color: #ef4444; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">⏳</div>
+  <h4>در انتظار تأیید</h4>
+  <p class="msg">
+    حسابت با موفقیت ثبت شد.<br>
+    ادمین سرور باید دسترسی تو را تأیید کند.
+    بعد از تأیید می‌توانی وارد پنل شوی.
+  </p>
+
+  <div class="user-info">
+    <div class="avatar">
+      {% if user and user.photo_url %}
+        <img src="{{ user.photo_url }}" alt="">
+      {% else %}
+        <i class="bi bi-person-fill"></i>
+      {% endif %}
+    </div>
+    <div>
+      <div class="user-name">{{ user.first_name if user else '' }} {{ user.last_name if user and user.last_name else '' }}</div>
+      <div class="user-id">@{{ user.username if user and user.username else '—' }} &nbsp;·&nbsp; ID: {{ user.tg_id if user else '' }}</div>
+    </div>
+  </div>
+
+  <button class="btn btn-primary btn-check" onclick="checkApproval()">
+    <i class="bi bi-arrow-clockwise me-2"></i>بررسی وضعیت
+  </button>
+  <br>
+  <button class="btn-logout" onclick="window.location='/logout'">
+    <i class="bi bi-box-arrow-left me-1"></i>خروج
+  </button>
+</div>
+
+<script>
+async function checkApproval() {
+  const r = await fetch('/api/status');
+  if (r.status === 401) { window.location.href = '/login'; return; }
+  // اگر approved شد صفحه اصلی باز می‌شود
+  window.location.reload();
+}
+</script>
+</body>
+</html>

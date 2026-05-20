@@ -1,30 +1,23 @@
 {
-  "api_id": 36209056,
+  "api_id": "36209056",
   "api_hash": "bd56122e61f85d30e4c559689f29c43e",
-  "target_group_id": -1003964412419,
+  "target_group_id": "-1003964412419",
   "topics": [
     {
       "topic_id": 4,
-      "name": "دلار",
+      "name": "دلار هرات",
       "sources": [
         {
           "chat": "@toofan_harirod",
           "filters": [
-            "نقدی",
-            "USD",
-            "دلار"
-          ]
-        },
-        {
-          "chat": "@tahran_sabza",
-          "filters": [
-            "نـــقـدی"
-          ]
-        },
-        {
-          "chat": "@mtotonchi_uae",
-          "filters": [
-            "تست"
+            [
+              "نقدی",
+              "فروش"
+            ],
+            [
+              "نــقدی",
+              "فروش"
+            ]
           ]
         }
       ]
@@ -36,12 +29,30 @@
         {
           "chat": "@Dirham_rate",
           "filters": [
-            "درهم"
+            [
+              "فروش"
+            ]
           ]
         },
         {
           "chat": "@DERHAMHSD12",
           "filters": []
+        }
+      ]
+    },
+    {
+      "topic_id": 54,
+      "name": "دلار تهران",
+      "sources": [
+        {
+          "chat": "@tahran_sabza",
+          "filters": [
+            [
+              "فروش",
+              "نــقدی"
+            ],
+            []
+          ]
         }
       ]
     }

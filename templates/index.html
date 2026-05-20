@@ -226,6 +226,35 @@
     .setup-step-circle { width:24px;height:24px;border-radius:50%;background:#2563eb;color:#fff;
       font-size:.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px; }
 
+    /* ── User pill ───────────────────────────── */
+    .user-pill { display:flex;align-items:center;gap:.4rem;cursor:pointer;padding:3px 8px 3px 4px;
+      border-radius:20px;border:1px solid rgba(255,255,255,.2);transition:background .15s;position:relative; }
+    .user-pill:hover { background:rgba(255,255,255,.1); }
+    .user-avatar { width:28px;height:28px;border-radius:50%;object-fit:cover; }
+    .user-avatar-placeholder { width:28px;height:28px;border-radius:50%;background:rgba(255,255,255,.2);
+      display:flex;align-items:center;justify-content:center;color:#bfdbfe;font-size:.85rem; }
+    .user-name-top { font-size:.78rem;color:#bfdbfe;font-weight:500;max-width:80px;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+    .user-menu { position:absolute;top:58px;left:1.25rem;background:#fff;border-radius:14px;
+      box-shadow:0 8px 30px rgba(0,0,0,.18);min-width:180px;z-index:100;overflow:hidden;
+      border:1px solid #e2e8f0; }
+    .user-menu-info { padding:.8rem 1rem;border-bottom:1px solid #f1f5f9; }
+    .user-menu-item { display:flex;align-items:center;padding:.65rem 1rem;font-size:.84rem;
+      color:#475569;text-decoration:none;transition:background .1s; }
+    .user-menu-item:hover { background:#fef2f2;color:#ef4444; }
+
+    /* ── Admin modal ─────────────────────────── */
+    .admin-user-row { display:flex;align-items:center;gap:.75rem;padding:.75rem 0;
+      border-bottom:1px solid #f8fafc; }
+    .admin-avatar { width:36px;height:36px;border-radius:50%;background:#f1f5f9;
+      display:flex;align-items:center;justify-content:center;font-size:1rem;color:#94a3b8;
+      overflow:hidden;flex-shrink:0; }
+    .admin-avatar img { width:100%;height:100%;object-fit:cover; }
+    .admin-user-info { flex:1;overflow:hidden; }
+    .admin-user-name { font-weight:600;font-size:.85rem;color:#1e293b; }
+    .admin-user-meta { font-size:.73rem;color:#94a3b8; }
+    .admin-badge { font-size:.68rem;padding:2px 7px;border-radius:10px; }
+
     /* ── Misc ─────────────────────────────────── */
     .spin { animation: spin .7s linear infinite; display: inline-block; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -253,12 +282,35 @@
   <button id="botToggleBtn" class="btn-bot start" onclick="toggleBot()" style="display:none"></button>
 
   <div class="topbar-right">
+    {% if user and user.is_admin %}
+    <button class="btn-topbar" onclick="openAdmin()" title="پنل ادمین">
+      <i class="bi bi-people-fill"></i> کاربران
+    </button>
+    {% endif %}
     <button class="btn-topbar" onclick="openSettings()">
-      <i class="bi bi-gear-fill"></i> تنظیمات API
+      <i class="bi bi-gear-fill"></i> تنظیمات
     </button>
     <button class="btn-save" id="saveBtn" onclick="saveAll()">
       <i class="bi bi-floppy-fill"></i> ذخیره تغییرات
     </button>
+    <!-- User avatar + logout -->
+    <div class="topbar-sep"></div>
+    <div class="user-pill" title="{{ user.first_name if user else '' }}" onclick="toggleUserMenu()" id="userPill">
+      {% if user and user.photo_url %}
+        <img src="{{ user.photo_url }}" class="user-avatar" alt="">
+      {% else %}
+        <div class="user-avatar-placeholder"><i class="bi bi-person-fill"></i></div>
+      {% endif %}
+      <span class="user-name-top">{{ user.first_name if user else '' }}</span>
+      <i class="bi bi-chevron-down" style="font-size:.6rem;opacity:.6"></i>
+    </div>
+    <div class="user-menu" id="userMenu" style="display:none">
+      <div class="user-menu-info">
+        <div style="font-weight:600;font-size:.85rem">{{ user.first_name if user else '' }} {{ user.last_name if user and user.last_name else '' }}</div>
+        <div style="font-size:.73rem;color:#94a3b8">@{{ user.username if user and user.username else '—' }}</div>
+      </div>
+      <a href="/logout" class="user-menu-item"><i class="bi bi-box-arrow-left me-2"></i>خروج</a>
+    </div>
   </div>
 </div>
 
@@ -567,6 +619,21 @@
   </div>
 </div>
 
+<!-- ══ MODAL: Admin ══════════════════════════════════════ -->
+<div class="modal fade" id="adminModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-people-fill me-2" style="color:#2563eb"></i>مدیریت کاربران</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="adminBody">
+        <div class="text-center text-muted py-3"><i class="bi bi-hourglass-split spin me-2"></i>در حال بارگذاری…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ Toast ══════════════════════════════════════════════ -->
 <div class="toast-wrap">
   <div class="toast-box" id="toastBox"></div>
@@ -580,7 +647,7 @@
 let tgTopics = [], cfgMap = {}, apiCfg = {}, selId = null;
 let tgOk = false, forumOk = false, botStatus = 'stopped';
 let logPollerTimer = null;
-let loginMdl, settingsMdl, createMdl, setupMdl;
+let loginMdl, settingsMdl, createMdl, setupMdl, adminMdl;
 
 // ═══════════════════════════════════════════════════════
 //  Boot
@@ -590,6 +657,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsMdl = new bootstrap.Modal(document.getElementById('settingsModal'));
   createMdl   = new bootstrap.Modal(document.getElementById('createModal'));
   setupMdl    = new bootstrap.Modal(document.getElementById('setupModal'));
+  adminMdl    = new bootstrap.Modal(document.getElementById('adminModal'));
+
+  // بستن user menu با کلیک خارج
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#userPill') && !e.target.closest('#userMenu'))
+      document.getElementById('userMenu').style.display = 'none';
+  });
 
   const cfg = await (await fetch('/api/config')).json();
   apiCfg = { api_id: cfg.api_id||'', api_hash: cfg.api_hash||'', target_group_id: cfg.target_group_id||'' };
@@ -1139,6 +1213,78 @@ function showToast(msg,type='success') {
 }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function escHtml(s) { return esc(s); }
+
+// ═══════════════════════════════════════════════════════
+//  User menu
+// ═══════════════════════════════════════════════════════
+function toggleUserMenu() {
+  const m = document.getElementById('userMenu');
+  m.style.display = m.style.display === 'none' ? 'block' : 'none';
+}
+
+// ═══════════════════════════════════════════════════════
+//  Admin panel
+// ═══════════════════════════════════════════════════════
+async function openAdmin() {
+  adminMdl.show();
+  await loadAdminUsers();
+}
+
+async function loadAdminUsers() {
+  const body = document.getElementById('adminBody');
+  body.innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass-split spin me-2"></i>در حال بارگذاری…</div>';
+  try {
+    const d = await (await fetch('/api/admin/users')).json();
+    if (!d.users) { body.innerHTML = '<p class="text-danger">خطا</p>'; return; }
+    if (!d.users.length) { body.innerHTML = '<p class="text-muted text-center py-3">کاربری وجود ندارد</p>'; return; }
+
+    body.innerHTML = d.users.map(u => `
+      <div class="admin-user-row">
+        <div class="admin-avatar">
+          ${u.photo_url ? `<img src="${esc(u.photo_url)}" alt="">` : '<i class="bi bi-person-fill"></i>'}
+        </div>
+        <div class="admin-user-info">
+          <div class="admin-user-name">${esc(u.first_name)} ${esc(u.last_name||'')}
+            ${u.is_admin ? '<span class="admin-badge bg-primary text-white ms-1">ادمین</span>' : ''}
+          </div>
+          <div class="admin-user-meta">
+            @${esc(u.username||'—')} &nbsp;·&nbsp; ID: ${u.tg_id}
+            &nbsp;·&nbsp;
+            <span style="color:${u.bot_status==='running'?'#16a34a':'#94a3b8'}">
+              Bot: ${u.bot_status}
+            </span>
+          </div>
+        </div>
+        <div style="display:flex;gap:.4rem;flex-shrink:0">
+          ${!u.is_approved ? `
+            <button class="btn btn-sm btn-success" style="border-radius:7px;font-size:.75rem"
+              onclick="adminApprove(${u.tg_id},false)">تأیید</button>
+            <button class="btn btn-sm btn-primary" style="border-radius:7px;font-size:.75rem"
+              onclick="adminApprove(${u.tg_id},true)">تأیید + ادمین</button>
+          ` : `
+            <button class="btn btn-sm btn-outline-danger" style="border-radius:7px;font-size:.75rem"
+              onclick="adminRevoke(${u.tg_id})">لغو دسترسی</button>
+          `}
+        </div>
+      </div>`).join('');
+  } catch { body.innerHTML = '<p class="text-danger">خطای شبکه</p>'; }
+}
+
+async function adminApprove(uid, asAdmin) {
+  await fetch(`/api/admin/users/${uid}/approve`, {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({admin: asAdmin})
+  });
+  showToast('کاربر تأیید شد ✓', 'success');
+  await loadAdminUsers();
+}
+
+async function adminRevoke(uid) {
+  if (!confirm('دسترسی این کاربر لغو شود؟')) return;
+  await fetch(`/api/admin/users/${uid}/revoke`, {method:'POST'});
+  showToast('دسترسی لغو شد', 'warning');
+  await loadAdminUsers();
+}
 </script>
 </body>
 </html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeleFilter — راه‌اندازی</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { font-family: 'Vazirmatn', sans-serif; box-sizing: border-box; }
+    body { background: linear-gradient(135deg, #0f172a, #1e3a8a); min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 2rem 1rem; }
+    .card { background: #fff; border-radius: 20px; padding: 2.5rem; max-width: 520px; width: 100%;
+      box-shadow: 0 25px 60px rgba(0,0,0,.35); }
+    .brand { display: flex; align-items: center; gap: .6rem; margin-bottom: 1.75rem; }
+    .brand-icon { width: 48px; height: 48px; background: #1e40af; border-radius: 14px;
+      display: flex; align-items: center; justify-content: center; color: #fff; font-size: 1.5rem; }
+    .brand-title { font-weight: 700; font-size: 1.2rem; color: #1e293b; }
+    .brand-sub { font-size: .78rem; color: #64748b; }
+    h5 { font-weight: 700; color: #1e293b; margin-bottom: .35rem; }
+    .section-note { font-size: .82rem; color: #64748b; line-height: 1.7; margin-bottom: 1.5rem;
+      background: #f8fafc; border-radius: 10px; padding: .75rem 1rem; border: 1px solid #e2e8f0; }
+    .form-label { font-size: .81rem; color: #475569; font-weight: 500; }
+    .form-control { border: 1.5px solid #e2e8f0; border-radius: 10px;
+      padding: .5rem .9rem; font-family: 'Vazirmatn', sans-serif; }
+    .form-control:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px #eff6ff; }
+    .form-text { font-size: .74rem; color: #94a3b8; margin-top: 3px; }
+    .btn-setup { width: 100%; border-radius: 12px; padding: .7rem; font-size: .95rem;
+      font-weight: 600; font-family: 'Vazirmatn', sans-serif; background: #1e40af; border: none; color: #fff; }
+    .btn-setup:hover { background: #1d4ed8; }
+    .step-badge { display: inline-block; background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe;
+      border-radius: 20px; padding: 2px 12px; font-size: .73rem; font-weight: 600; margin-bottom: .6rem; }
+    .err { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca;
+      border-radius: 10px; padding: .6rem 1rem; font-size: .82rem; margin-top: .75rem; display: none; }
+    .spin { animation: spin .7s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .divider { border: none; border-top: 1px solid #f1f5f9; margin: 1.5rem 0; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="brand">
+    <div class="brand-icon"><i class="bi bi-telegram"></i></div>
+    <div>
+      <div class="brand-title">TeleFilter</div>
+      <div class="brand-sub">راه‌اندازی اولیه سرور</div>
+    </div>
+  </div>
+
+  <div class="section-note">
+    <i class="bi bi-shield-lock-fill me-2" style="color:#2563eb"></i>
+    این صفحه فقط یک بار نشان داده می‌شود. اطلاعات زیر توسط ادمین سرور وارد می‌شود.
+  </div>
+
+  <!-- API Telegram -->
+  <div class="step-badge">مرحله ۱ — API تلگرام</div>
+  <h5>API ID و API Hash</h5>
+  <p class="form-text mb-3">از <a href="https://my.telegram.org" target="_blank">my.telegram.org</a> بگیر → API development tools</p>
+  <div class="mb-3">
+    <label class="form-label">API ID</label>
+    <input type="text" id="api_id" class="form-control" dir="ltr" placeholder="12345678">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">API Hash</label>
+    <input type="text" id="api_hash" class="form-control font-monospace" dir="ltr" placeholder="0123456789abcdef...">
+  </div>
+
+  <hr class="divider">
+
+  <!-- Bot -->
+  <div class="step-badge">مرحله ۲ — Bot تلگرام</div>
+  <h5>اطلاعات Bot</h5>
+  <p class="form-text mb-3">
+    با <a href="https://t.me/BotFather" target="_blank">@BotFather</a> یک bot بساز (<code>/newbot</code>)،
+    سپس با <code>/setdomain</code> دامنه سرورت را تنظیم کن.
+  </p>
+  <div class="mb-3">
+    <label class="form-label">Bot Token</label>
+    <input type="text" id="bot_token" class="form-control font-monospace" dir="ltr" placeholder="123456789:AABCdef...">
+  </div>
+  <div class="mb-4">
+    <label class="form-label">Bot Username</label>
+    <input type="text" id="bot_username" class="form-control" dir="ltr" placeholder="YourBotName (بدون @)">
+    <div class="form-text">نام کاربری bot بدون علامت @ — برای Login Widget لازم است</div>
+  </div>
+
+  <div class="err" id="setupErr"></div>
+  <button class="btn-setup" id="setupBtn" onclick="doSetup()">
+    <i class="bi bi-check-lg me-2"></i>ذخیره و شروع
+  </button>
+</div>
+
+<script>
+async function doSetup() {
+  const fields = ['api_id','api_hash','bot_token','bot_username'];
+  const data = Object.fromEntries(fields.map(k => [k, document.getElementById(k).value.trim()]));
+  if (fields.some(k => !data[k])) {
+    showErr('همه فیلدها الزامی هستند'); return;
+  }
+  const btn = document.getElementById('setupBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-hourglass-split spin me-2"></i>در حال ذخیره…';
+  const r = await fetch('/setup', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+  const d = await r.json();
+  if (d.ok) { window.location.href = '/'; }
+  else { showErr(d.error || 'خطا'); btn.disabled=false; btn.innerHTML='<i class="bi bi-check-lg me-2"></i>ذخیره و شروع'; }
+}
+function showErr(msg) {
+  const e = document.getElementById('setupErr'); e.textContent = msg; e.style.display = 'block';
+}
+</script>
+</body>
+</html>
