@@ -34,6 +34,31 @@ target_entities: dict[str, object] = {}
 target_forum: dict[str, bool] = {}
 
 
+def _peer_keys(entity) -> set[int]:
+    """شناسه‌های ممکن یک چت برای تطبیق با event.chat_id."""
+    keys = set()
+    try:
+        keys.add(get_peer_id(entity))
+    except Exception:
+        pass
+    cid = getattr(entity, 'id', None)
+    if cid is None:
+        return keys
+    cid = int(cid)
+    keys.add(cid)
+    keys.add(-cid)
+    if cid > 0:
+        keys.add(int(f'-100{cid}'))
+    return keys
+
+
+def _add_source_route(peer_keys: set[int], route: tuple):
+    for key in peer_keys:
+        if key not in source_map:
+            source_map[key] = []
+        source_map[key].append(route)
+
+
 async def _resolve_entity(client, identifier):
     try:
         return await client.get_entity(identifier)
@@ -123,12 +148,11 @@ async def setup():
                         pass
 
                     entity = await _resolve_entity(client, chat_val)
-                    peer_id = get_peer_id(entity)
-                    name = getattr(entity, 'title', None) or getattr(entity, 'username', None) or str(peer_id)
+                    peer_keys = _peer_keys(entity)
+                    name = getattr(entity, 'title', None) or getattr(entity, 'username', None) or getattr(entity, 'first_name', None) or str(next(iter(peer_keys), chat))
 
-                    if peer_id not in source_map:
-                        source_map[peer_id] = []
-                    source_map[peer_id].append((gid, topic_id, filters, use_topic))
+                    route = (gid, topic_id, filters, use_topic)
+                    _add_source_route(peer_keys, route)
 
                     dest = f"{title} / {topic_name}" if use_topic else title
                     filter_info = f"{len(filters)} فیلتر" if filters else "همه پیام‌ها"
@@ -177,7 +201,17 @@ async def forward_handler(event):
 
     chat = await event.get_chat()
     peer_id = get_peer_id(chat)
-    entries = source_map.get(peer_id) or source_map.get(event.chat_id)
+    lookup_ids = {peer_id, event.chat_id}
+    if hasattr(event, 'peer_id') and event.peer_id:
+        try:
+            lookup_ids.add(get_peer_id(event.peer_id))
+        except Exception:
+            pass
+    entries = None
+    for lid in lookup_ids:
+        entries = source_map.get(lid)
+        if entries:
+            break
     if not entries:
         return
 

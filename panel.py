@@ -189,30 +189,57 @@ def user_dir(tg_id: int) -> str:
 def user_config_path(tg_id: int) -> str:
     return os.path.join(user_dir(tg_id), 'config.json')
 
-def user_session_path(tg_id: int, kind: str = 'telefilter') -> str:
+PANEL_SESSION = 'panel'
+FWD_SESSION   = 'fwd'
+LEGACY_SESSION = 'telefilter'
+
+def user_session_path(tg_id: int, kind: str = PANEL_SESSION) -> str:
     """مسیر پایه session (بدون پسوند) — Telethon خودش .session اضافه می‌کند."""
     return os.path.join(user_dir(tg_id), kind)
 
-def _session_file(uid: int, kind: str = 'telefilter') -> str:
+def _session_file(uid: int, kind: str = PANEL_SESSION) -> str:
     return user_session_path(uid, kind) + '.session'
 
-def _migrate_panel_session(uid: int):
-    """نسخه‌های قدیم panel.session را به telefilter منتقل می‌کند."""
-    tele = _session_file(uid, 'telefilter')
-    panel = _session_file(uid, 'panel')
-    if os.path.exists(tele):
-        return
-    if not os.path.exists(panel):
-        return
+def _copy_session_file(src: str, dst: str):
     import shutil
-    shutil.copy2(panel, tele)
-    journal = panel + '-journal'
-    if os.path.exists(journal):
-        shutil.copy2(journal, tele + '-journal')
+    shutil.copy2(src, dst)
+    for suffix in ('-journal', '-wal', '-shm'):
+        s = src + suffix
+        if os.path.exists(s):
+            shutil.copy2(s, dst + suffix)
+
+def _copy_session_kind(uid: int, src_kind: str, dst_kind: str):
+    src = _session_file(uid, src_kind)
+    if not os.path.exists(src):
+        return
+    _copy_session_file(src, _session_file(uid, dst_kind))
+
+def _migrate_sessions(uid: int):
+    """session قدیمی تکی را به panel+fwd جداگانه منتقل می‌کند."""
+    panel = _session_file(uid, PANEL_SESSION)
+    if os.path.exists(panel):
+        if not os.path.exists(_session_file(uid, FWD_SESSION)):
+            _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
+        return
+    legacy = _session_file(uid, LEGACY_SESSION)
+    if os.path.exists(legacy):
+        _copy_session_file(legacy, panel)
+        _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
+        return
+    very_old = os.path.join(user_dir(uid), 'panel.session')
+    if os.path.exists(very_old):
+        _copy_session_file(very_old, panel)
+        _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
+
+def sync_fwd_session(uid: int):
+    """پس از لاگین پنل، session فوروارد را همگام می‌کند (دو اتصال مستقل)."""
+    _migrate_sessions(uid)
+    if session_on_disk(uid):
+        _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
 
 def session_on_disk(uid: int) -> bool:
-    _migrate_panel_session(uid)
-    return os.path.exists(_session_file(uid))
+    _migrate_sessions(uid)
+    return os.path.exists(_session_file(uid, PANEL_SESSION))
 
 def _apply_master_api(cfg: dict) -> dict:
     m = load_master()
@@ -330,7 +357,8 @@ def start_fwd(uid: int) -> bool:
     with _fwd_lock:
         _stop_fwd(uid)
         cfg  = user_config_path(uid)
-        sess = user_session_path(uid)
+        sync_fwd_session(uid)
+        sess = user_session_path(uid, FWD_SESSION)
         _logs(uid).append('— starting forwarder —')
         proc = subprocess.Popen(
             [sys.executable, MAIN_SCRIPT, '--config', cfg, '--session', sess,
@@ -414,8 +442,8 @@ def _make_client(uid: int) -> TelegramClient | None:
     if old:
         try: asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=5)
         except Exception: pass
-    _migrate_panel_session(uid)
-    client = TelegramClient(user_session_path(uid), int(api_id), api_hash, loop=_tg_loop)
+    _migrate_sessions(uid)
+    client = TelegramClient(user_session_path(uid, PANEL_SESSION), int(api_id), api_hash, loop=_tg_loop)
     _tg_clients[uid]   = client
     _tg_connected[uid] = False
     if uid not in _tg_auth:
@@ -597,10 +625,9 @@ def update_config():
     uid  = cur_uid()
     data = request.get_json()
     save_user_config(uid, data)
-    was_running = fwd_status(uid) == 'running'
-    if was_running or tg_ok(uid):
-        auto_start_fwd(uid)
-    return jsonify({'ok': True, 'restarted': was_running})
+    sync_fwd_session(uid)
+    auto_start_fwd(uid)
+    return jsonify({'ok': True, 'restarted': True})
 
 @app.route('/api/status')
 @login_required
@@ -662,6 +689,7 @@ def fwd_logs():
 # ══════════════════════════════════════════════════════════
 def _finish_telethon_login(uid: int):
     initialize_user_config(uid)
+    sync_fwd_session(uid)
     reset_tg_client(uid)
     auto_start_fwd(uid)
 
@@ -860,7 +888,7 @@ def _peer_is_forum(c, tg_gid: int, cfg: dict, group_id: str) -> bool:
         ent = tg_run(c.get_entity(tg_gid))
         return bool(getattr(ent, 'forum', False))
     except Exception:
-        return True
+        return False
 
 
 def _resolve_member(c, ref: str):

@@ -54,6 +54,9 @@ def _norm_group(g: dict) -> dict:
     }
     if 'is_forum' in g:
         out['is_forum'] = bool(g['is_forum'])
+    else:
+        # گروه‌های قدیمی بدون فیلد: اگر topic_id>0 دارند، Forum است
+        out['is_forum'] = any(int(t.get('topic_id') or 0) > 0 for t in (g.get('topics') or []))
     return out
 
 

@@ -50,7 +50,12 @@ function buildCfgMapFromGroups(grps) {
 function cfgKey(gid, tid) { return `${gid}:${tid}`; }
 
 function groupIsForum(g) {
-  return g && g.is_forum !== false;
+  if (!g) return false;
+  if (g.is_forum === true) return true;
+  if (g.is_forum === false) return false;
+  const topics = tgTopicsByGroup[g.id];
+  if (topics?.length) return topics.some(t => t.id > 0);
+  return false;
 }
 
 function ensureCfg() {
@@ -88,14 +93,45 @@ async function refreshStatus() {
   } catch { /* silent */ }
 }
 
+async function showForwarderLogs() {
+  try {
+    const d = await (await fetch('/api/forwarder/logs?n=40')).json();
+    const lines = (d.logs || []).slice(-12).join('\n') || 'لاگی موجود نیست';
+    showToast(lines.slice(0, 200), 'danger');
+  } catch {
+    showToast('خطا در خواندن لاگ فوروارد', 'danger');
+  }
+}
+
+let statusPollTimer = null;
+
+function startStatusPolling() {
+  if (statusPollTimer) clearTimeout(statusPollTimer);
+  const schedule = () => {
+    const delay = (hasSession && botStatus !== 'running') ? 2500 : 30000;
+    statusPollTimer = setTimeout(async () => {
+      await refreshStatus();
+      schedule();
+    }, delay);
+  };
+  schedule();
+  setTimeout(refreshStatus, 4000);
+  setTimeout(refreshStatus, 9000);
+}
+
 function updateConnBadge() {
   const b = document.getElementById('connBadge');
-    if (hasSession && botStatus === 'running') {
+  if (hasSession && botStatus === 'running') {
     b.className = 'tbadge ok';
     const srcHint = (window._sourcesConfigured === 0) ? ' — سورسی ذخیره نشده' : '';
     b.innerHTML = `<i class="bi bi-circle-fill dot"></i> فوروارد فعال${srcHint}`;
     b.onclick = null;
     b.style.cursor = 'default';
+  } else if (hasSession && String(botStatus).startsWith('crashed')) {
+    b.className = 'tbadge err';
+    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> فوروارد خطا — کلیک برای جزئیات';
+    b.onclick = () => showForwarderLogs();
+    b.style.cursor = 'pointer';
   } else if (hasSession && !tgOk) {
     b.className = 'tbadge warn';
     b.innerHTML = '<i class="bi bi-circle-fill dot"></i> تکمیل اتصال';
@@ -938,10 +974,11 @@ async function saveAll() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ groups: outGroups }),
   });
-  const d = await res.json();
+  await res.json();
   await loadConfigFromServer();
   markClean();
-  showToast(d.restarted ? 'ذخیره شد ✓' : 'ذخیره شد ✓', 'success');
+  showToast('ذخیره شد ✓ — فوروارد در حال به‌روزرسانی', 'success');
+  await refreshStatus();
 }
 
 function normalizeFilters(filters) {
@@ -1027,5 +1064,5 @@ async function bootMain() {
     await syncAllTopics();
     renderTree();
   }
-  setInterval(refreshStatus, 30000);
+  startStatusPolling();
 }
