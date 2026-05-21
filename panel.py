@@ -232,10 +232,13 @@ def _migrate_sessions(uid: int):
         _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
 
 def sync_fwd_session(uid: int):
-    """پس از لاگین پنل، session فوروارد را همگام می‌کند (دو اتصال مستقل)."""
+    """پس از لاگین پنل، session فوروارد را همگام می‌کند (دو فایل جدا: panel / fwd)."""
     _migrate_sessions(uid)
-    if session_on_disk(uid):
-        _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
+    if not session_on_disk(uid):
+        return
+    disconnect_tg_client(uid)
+    time.sleep(0.2)
+    _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
 
 def session_on_disk(uid: int) -> bool:
     _migrate_sessions(uid)
@@ -334,29 +337,86 @@ def _log_reader(proc: subprocess.Popen, uid: int):
     except Exception:
         pass
 
+def _fwd_pid_path(uid: int) -> str:
+    return os.path.join(user_dir(uid), '.forwarder.pid')
+
+
+def _fwd_running_global(uid: int) -> bool:
+    """آیا main.py این کاربر از هر workerای در حال اجراست؟"""
+    path = _fwd_pid_path(uid)
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            pid = int(f.read().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return False
+
+
+def _write_fwd_pid(uid: int, pid: int):
+    with open(_fwd_pid_path(uid), 'w', encoding='utf-8') as f:
+        f.write(str(pid))
+
+
+def _clear_fwd_pid(uid: int, expected_pid: int | None = None):
+    path = _fwd_pid_path(uid)
+    if not os.path.isfile(path):
+        return
+    if expected_pid is not None:
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                if int(f.read().strip()) != expected_pid:
+                    return
+        except (OSError, ValueError):
+            pass
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def fwd_status(uid: int) -> str:
     p = _fwd_procs.get(uid)
-    if p is None:          return 'stopped'
-    if p.poll() is None:   return 'running'
-    return f'crashed ({p.returncode})' if p.returncode != 0 else 'stopped'
+    if p is not None and p.poll() is None:
+        return 'running'
+    if _fwd_running_global(uid):
+        return 'running'
+    if p is not None and p.returncode not in (None, 0):
+        return f'crashed ({p.returncode})'
+    return 'stopped'
+
 
 def _stop_fwd(uid: int):
     p = _fwd_procs.get(uid)
     if p and p.poll() is None:
         _logs(uid).append('— stopping forwarder —')
         p.terminate()
-        try:   p.wait(timeout=6)
-        except subprocess.TimeoutExpired: p.kill()
+        try:
+            p.wait(timeout=6)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        _clear_fwd_pid(uid, p.pid)
     _fwd_procs[uid] = None
+
 
 def start_fwd(uid: int) -> bool:
     """فوروارد را اجرا می‌کند؛ اگر session وجود نداشته باشد False برمی‌گرداند."""
     if not session_on_disk(uid):
         _logs(uid).append('— forwarder skipped: no Telegram session (login in panel) —')
         return False
+    if _fwd_running_global(uid):
+        return True
     with _fwd_lock:
+        if _fwd_running_global(uid):
+            return True
         _stop_fwd(uid)
-        cfg  = user_config_path(uid)
+        cfg = user_config_path(uid)
         sync_fwd_session(uid)
         sess = user_session_path(uid, FWD_SESSION)
         _logs(uid).append('— starting forwarder —')
@@ -367,6 +427,7 @@ def start_fwd(uid: int) -> bool:
             text=True, encoding='utf-8', errors='replace', bufsize=1
         )
         _fwd_procs[uid] = proc
+        _write_fwd_pid(uid, proc.pid)
         threading.Thread(target=_log_reader, args=(proc, uid), daemon=True).start()
     return True
 
@@ -388,9 +449,9 @@ def needs_telethon_login(uid: int) -> bool:
     return not session_on_disk(uid)
 
 def _auto_start_all():
+    """فقط فوروارد را بالا می‌آورد — بدون باز کردن panel.session (جلوگیری از database locked)."""
     for u in db_all_users():
         if u['is_approved']:
-            ensure_client(u['tg_id'])
             auto_start_fwd(u['tg_id'])
 
 def _fwd_watchdog():
@@ -489,14 +550,19 @@ async def _telegram_ready_async(uid: int) -> bool:
     await _connect(uid)
     return _tg_connected.get(uid, False)
 
-def reset_tg_client(uid: int) -> TelegramClient | None:
+def disconnect_tg_client(uid: int):
+    """اتصال Telethon پنل را قطع می‌کند تا fwd.session قفل نشود."""
     old = _tg_clients.pop(uid, None)
     if old:
         try:
-            asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=5)
+            asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=8)
         except Exception:
             pass
     _tg_connected[uid] = False
+
+
+def reset_tg_client(uid: int) -> TelegramClient | None:
+    disconnect_tg_client(uid)
     return ensure_client(uid)
 
 def ensure_client(uid: int) -> TelegramClient | None:
@@ -607,7 +673,6 @@ def index():
         return render_template('pending.html', user=user)
     uid = cur_uid()
     initialize_user_config(uid)
-    ensure_client(uid)
     auto_start_fwd(uid)
     return render_template('index.html', user=user, master_api=master_api_ready())
 

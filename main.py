@@ -165,7 +165,10 @@ async def setup():
                 except Exception as e:
                     logger.error(f"  [{topic_name}] Could not resolve '{chat}': {e}")
 
-    logger.info(f"Active routes: {sum(len(v) for v in source_map.values())}")
+    n = sum(len(v) for v in source_map.values())
+    logger.info(f"Active routes: {n}")
+    if n:
+        logger.info(f"Watching source peer ids: {sorted(source_map.keys())}")
 
 
 def _matches_filters(text: str, filters: list) -> bool:
@@ -194,11 +197,8 @@ async def _forward_to_target(event, group_gid, topic_id, use_topic):
     await client(ForwardMessagesRequest(**kwargs))
 
 
-@client.on(events.NewMessage())
+@client.on(events.NewMessage(incoming=True))
 async def forward_handler(event):
-    if event.out:
-        return
-
     chat = await event.get_chat()
     peer_id = get_peer_id(chat)
     lookup_ids = {peer_id, event.chat_id}
