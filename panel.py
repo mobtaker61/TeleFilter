@@ -26,7 +26,7 @@ from telethon.utils import get_peer_id
 
 from config_util import (
     normalize_config, empty_config, find_group, new_group_id,
-    config_stats, dashboard_stats,
+    config_stats, dashboard_stats, group_config_stats,
 )
 
 try:
@@ -73,6 +73,10 @@ def save_master(data: dict):
 def master_ready() -> bool:
     m = load_master()
     return bool(m.get('bot_token') and m.get('bot_username'))
+
+def master_api_ready() -> bool:
+    m = load_master()
+    return bool(m.get('api_id') and m.get('api_hash'))
 
 # ══════════════════════════════════════════════════════════
 #  Flask app  (secret_key از master config می‌آید)
@@ -190,14 +194,13 @@ def load_user_config(tg_id: int) -> dict:
 
 def save_user_config(tg_id: int, data: dict):
     cfg = normalize_config(data)
+    m = load_master()
+    cfg['api_id'] = str(m.get('api_id', ''))
+    cfg['api_hash'] = str(m.get('api_hash', ''))
     with open(user_config_path(tg_id), 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 def user_api_credentials(uid: int) -> tuple[str, str]:
-    cfg = load_user_config(uid)
-    api_id, api_hash = cfg.get('api_id', ''), cfg.get('api_hash', '')
-    if api_id and api_hash:
-        return str(api_id), str(api_hash)
     m = load_master()
     return str(m.get('api_id', '')), str(m.get('api_hash', ''))
 
@@ -424,14 +427,11 @@ def setup_page():
 @app.route('/setup', methods=['POST'])
 def do_setup():
     d = request.get_json() or {}
-    required = ('bot_token', 'bot_username')
+    required = ('api_id', 'api_hash', 'bot_token', 'bot_username')
     if not all(d.get(k) for k in required):
-        return jsonify({'error': 'bot_token و bot_username الزامی‌اند'}), 400
+        return jsonify({'error': 'API و Bot الزامی‌اند'}), 400
     m = load_master()
     m.update({k: d[k] for k in required})
-    for k in ('api_id', 'api_hash'):
-        if d.get(k):
-            m[k] = d[k]
     if not m.get('secret_key'):
         m['secret_key'] = secrets.token_hex(32)
     save_master(m)
@@ -508,7 +508,7 @@ def index():
     uid = cur_uid()
     ensure_client(uid)
     auto_start_fwd(uid)
-    return render_template('index.html', user=user)
+    return render_template('index.html', user=user, master_api=master_api_ready())
 
 # ══════════════════════════════════════════════════════════
 #  Routes — API: Config
@@ -534,7 +534,7 @@ def update_config():
 def get_status():
     uid = cur_uid()
     ensure_client(uid)
-    cfg = load_user_config(uid)
+    user = db_get_user(uid)
     return jsonify({
         'connected':        tg_ok(uid),
         'has_client':       _tg_clients.get(uid) is not None,
@@ -543,9 +543,10 @@ def get_status():
         'bot':              fwd_status(uid),
         'auto_forwarder':   True,
         'has_session':      session_on_disk(uid),
-        'needs_api':        not (cfg.get('api_id') and cfg.get('api_hash')),
+        'needs_api':        not master_api_ready(),
         'needs_telethon':   needs_telethon_login(uid),
-        'onboarding_done':  bool(cfg.get('api_id') and session_on_disk(uid)),
+        'is_admin':         bool(user and user.get('is_admin')),
+        'onboarding_done':  master_api_ready() and session_on_disk(uid),
     })
 
 # ══════════════════════════════════════════════════════════
@@ -659,8 +660,16 @@ def _group_telegram_id(cfg: dict, group_id: str) -> int | None:
 def api_dashboard_stats():
     uid = cur_uid()
     cfg = load_user_config(uid)
-    stats = config_stats(cfg)
-    stats.update(dashboard_stats(uid))
+    group_id = request.args.get('group_id', '').strip() or None
+    if group_id:
+        g = find_group(cfg, group_id)
+        if not g:
+            return jsonify({'error': 'not_found'}), 404
+        stats = group_config_stats(cfg, group_id)
+        stats.update(dashboard_stats(uid, group_id))
+    else:
+        stats = config_stats(cfg)
+        stats.update(dashboard_stats(uid))
     stats['bot'] = fwd_status(uid)
     stats['connected'] = session_on_disk(uid)
     return jsonify(stats)

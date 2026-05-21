@@ -114,27 +114,73 @@ def record_forward(user_id: int, group_id: str, topic_id: int, source_peer: int)
         c.commit()
 
 
-def dashboard_stats(user_id: int) -> dict:
+def group_config_stats(cfg: dict, group_id: str) -> dict:
+    g = find_group(cfg, group_id)
+    if not g:
+        return {}
+    topics = sources = filters = 0
+    topic_list = []
+    for t in g.get('topics') or []:
+        topics += 1
+        sc = len(t.get('sources') or [])
+        sources += sc
+        topic_list.append({'topic_id': t.get('topic_id'), 'name': t.get('name', ''), 'sources': sc})
+        for s in t.get('sources') or []:
+            fl = s.get('filters') or []
+            for rule in fl:
+                if isinstance(rule, str):
+                    filters += 1
+                else:
+                    filters += len(rule)
+    return {
+        'id': g['id'],
+        'title': g.get('title', ''),
+        'telegram_id': g.get('telegram_id', ''),
+        'origin': g.get('origin', 'linked'),
+        'topics': topics,
+        'sources': sources,
+        'filters': filters,
+        'topic_list': topic_list,
+    }
+
+
+def dashboard_stats(user_id: int, group_id: str | None = None) -> dict:
     base = {'forwards_today': 0, 'forwards_total': 0, 'chart': [], 'recent_topics': []}
     if not user_id:
         return base
     now = datetime.utcnow()
     today = now.strftime('%Y-%m-%d')
     week_ago = (now - timedelta(days=6)).strftime('%Y-%m-%d')
+    gf = ' AND group_id=?' if group_id else ''
+    params_base = [user_id]
+    if group_id:
+        params_base.append(group_id)
     with sqlite3.connect(DB_PATH) as c:
         c.row_factory = sqlite3.Row
         base['forwards_total'] = c.execute(
-            'SELECT COUNT(*) FROM forward_log WHERE user_id=?', (user_id,)
+            f'SELECT COUNT(*) FROM forward_log WHERE user_id=?{gf}', params_base
         ).fetchone()[0]
-        base['forwards_today'] = c.execute(
-            "SELECT COUNT(*) FROM forward_log WHERE user_id=? AND date(created_at)=?",
-            (user_id, today),
-        ).fetchone()[0]
+        if group_id:
+            base['forwards_today'] = c.execute(
+                'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND group_id=? AND date(created_at)=?',
+                (user_id, group_id, today),
+            ).fetchone()[0]
+        else:
+            base['forwards_today'] = c.execute(
+                'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND date(created_at)=?',
+                (user_id, today),
+            ).fetchone()[0]
+        if group_id:
+            p_week = [user_id, group_id, week_ago]
+            p_chart_where = 'user_id=? AND group_id=? AND date(created_at)>=?'
+        else:
+            p_week = [user_id, week_ago]
+            p_chart_where = 'user_id=? AND date(created_at)>=?'
         rows = c.execute(
-            '''SELECT date(created_at) AS d, COUNT(*) AS n
-               FROM forward_log WHERE user_id=? AND date(created_at)>=?
+            f'''SELECT date(created_at) AS d, COUNT(*) AS n
+               FROM forward_log WHERE {p_chart_where}
                GROUP BY date(created_at) ORDER BY d''',
-            (user_id, week_ago),
+            p_week,
         ).fetchall()
         by_day = {r['d']: r['n'] for r in rows}
         chart = []
@@ -143,10 +189,10 @@ def dashboard_stats(user_id: int) -> dict:
             chart.append({'date': d, 'count': by_day.get(d, 0)})
         base['chart'] = chart
         recent = c.execute(
-            '''SELECT group_id, topic_id, COUNT(*) AS n
-               FROM forward_log WHERE user_id=?
+            f'''SELECT group_id, topic_id, COUNT(*) AS n
+               FROM forward_log WHERE user_id=?{gf}
                GROUP BY group_id, topic_id ORDER BY MAX(created_at) DESC LIMIT 8''',
-            (user_id,),
+            params_base,
         ).fetchall()
         base['recent_topics'] = [dict(r) for r in recent]
     return base

@@ -1,11 +1,12 @@
 /* TeleFilter panel UI */
-let groups = [], cfgMap = {}, apiCfg = {};
+let groups = [], cfgMap = {};
 let selGroupId = null, selTopicId = null;
 let tgTopicsByGroup = {};
+let expandedGroups = new Set();
 let tgOk = false, forumOk = false, botStatus = 'stopped', hasSession = false;
 let needsApi = false, needsTelethon = false;
+let isAdmin = window.TF_IS_ADMIN === true || window.TF_IS_ADMIN === 'true';
 let loginMdl, settingsMdl, createMdl, setupMdl, adminMdl, linkGroupMdl, createGroupMdl;
-let setupStep = 1;
 
 document.addEventListener('DOMContentLoaded', async () => {
   loginMdl = new bootstrap.Modal(document.getElementById('loginModal'));
@@ -27,7 +28,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function loadConfigFromServer() {
   const cfg = await (await fetch('/api/config')).json();
-  apiCfg = { api_id: cfg.api_id || '', api_hash: cfg.api_hash || '' };
   groups = cfg.groups || [];
   cfgMap = buildCfgMapFromGroups(groups);
 }
@@ -57,9 +57,8 @@ function ensureCfg() {
 async function runOnboarding() {
   await refreshStatus();
   if (needsApi) {
-    setupStep = 1;
-    renderSetupStep();
-    setupMdl.show();
+    renderTree();
+    showToast('ادمین: API تلگرام را در setup سرور تنظیم کنید', 'warning');
     return;
   }
   if (needsTelethon) {
@@ -78,6 +77,7 @@ async function refreshStatus() {
     hasSession = !!s.has_session;
     needsApi = !!s.needs_api;
     needsTelethon = !!s.needs_telethon;
+    if (s.is_admin !== undefined) isAdmin = !!s.is_admin;
     updateConnBadge();
   } catch { /* silent */ }
 }
@@ -124,73 +124,34 @@ function onBadgeClick() {
   if (needsTelethon || !hasSession) openTelethonSetup(false);
 }
 
-// ── Setup wizard (per-user API) ─────────────────────────
-function renderSetupStep() {
-  [1, 2, 3].forEach(i => {
-    document.getElementById(`spanel${i}`).classList.toggle('active', i === setupStep);
-    const si = document.getElementById(`sstep${i}`);
-    si.classList.toggle('active', i === setupStep);
-    si.classList.toggle('done', i < setupStep);
-  });
-  document.querySelectorAll('.setup-step-sep').forEach((el, idx) => {
-    el.classList.toggle('done', setupStep > idx + 1);
-  });
-  document.getElementById('setupBackBtn').style.display = setupStep > 1 ? 'inline-flex' : 'none';
-  document.getElementById('setupNextBtn').innerHTML = setupStep === 3
-    ? '<i class="bi bi-check-lg me-1"></i> ذخیره و ادامه'
-    : 'بعدی <i class="bi bi-arrow-left ms-1"></i>';
-  checkSetupReady();
+function chartHtml(chart) {
+  const maxC = Math.max(1, ...(chart || []).map(x => x.count));
+  return (chart || []).map(x => {
+    const h = Math.round((x.count / maxC) * 100);
+    return `<div class="dash-bar-wrap" title="${x.date}: ${x.count}">
+      <div class="dash-bar" style="height:${h}%"></div>
+      <span class="dash-bar-lbl">${x.date.slice(5)}</span></div>`;
+  }).join('') || '<span class="text-muted">هنوز داده‌ای نیست</span>';
 }
 
-function checkSetupReady() {
-  if (setupStep !== 3) return;
-  const ok = document.getElementById('setup_api_id').value.trim() &&
-    document.getElementById('setup_api_hash').value.trim();
-  document.getElementById('setupNextBtn').disabled = !ok;
+function hideMainPanels() {
+  document.getElementById('dashboardPanel').style.display = 'none';
+  document.getElementById('groupDetailPanel').style.display = 'none';
+  document.getElementById('topicDetail').style.display = 'none';
 }
 
-async function setupNav(dir) {
-  if (setupStep === 3 && dir === 1) { await doSetupSave(); return; }
-  setupStep = Math.max(1, Math.min(3, setupStep + dir));
-  renderSetupStep();
-}
-
-async function doSetupSave() {
-  const api_id = document.getElementById('setup_api_id').value.trim();
-  const api_hash = document.getElementById('setup_api_hash').value.trim();
-  const errEl = document.getElementById('setupErr');
-  errEl.style.display = 'none';
-  if (!api_id || !api_hash) {
-    errEl.textContent = 'API ID و API Hash الزامی هستند';
-    errEl.style.display = 'block';
-    return;
-  }
-  apiCfg = { api_id, api_hash };
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...apiCfg, groups }),
-  });
-  setupMdl.hide();
-  showToast('API ذخیره شد ✓', 'success');
-  await runOnboarding();
-}
-
-// ── Dashboard ───────────────────────────────────────────
+// ── Dashboard (کل حساب) ───────────────────────────────
 async function loadDashboard() {
+  hideMainPanels();
   const el = document.getElementById('dashboardPanel');
-  if (!el) return;
+  el.style.display = 'block';
+  selGroupId = null;
+  selTopicId = null;
+  renderTree();
   try {
     const s = await (await fetch('/api/dashboard/stats')).json();
-    const maxC = Math.max(1, ...(s.chart || []).map(x => x.count));
-    const bars = (s.chart || []).map(x => {
-      const h = Math.round((x.count / maxC) * 100);
-      const label = x.date.slice(5);
-      return `<div class="dash-bar-wrap" title="${x.date}: ${x.count}">
-        <div class="dash-bar" style="height:${h}%"></div>
-        <span class="dash-bar-lbl">${label}</span></div>`;
-    }).join('');
     el.innerHTML = `
+      <h5 class="mb-3" style="font-weight:700;color:#1e293b"><i class="bi bi-speedometer2 me-2"></i>داشبورد</h5>
       <div class="dash-grid">
         <div class="dash-card"><div class="dash-num">${s.groups || 0}</div><div class="dash-lbl">گروه</div></div>
         <div class="dash-card"><div class="dash-num">${s.topics || 0}</div><div class="dash-lbl">Topic</div></div>
@@ -200,20 +161,79 @@ async function loadDashboard() {
         <div class="dash-card"><div class="dash-num">${s.forwards_total || 0}</div><div class="dash-lbl">کل فوروارد</div></div>
       </div>
       <div class="dash-chart-box">
-        <div class="dash-chart-title"><i class="bi bi-bar-chart-fill"></i> فوروارد ۷ روز اخیر</div>
-        <div class="dash-chart">${bars || '<span class="text-muted">هنوز داده‌ای نیست</span>'}</div>
+        <div class="dash-chart-title"><i class="bi bi-bar-chart-fill"></i> فوروارد ۷ روز اخیر (همه گروه‌ها)</div>
+        <div class="dash-chart">${chartHtml(s.chart)}</div>
       </div>
-      <p class="dash-hint">از سایدبار یک گروه اضافه کنید، سپس Topic و سورس تنظیم کنید.</p>`;
+      <p class="dash-hint">روی نام گروه کلیک کنید — با + کنار گروه، Topics را باز کنید.</p>`;
   } catch {
     el.innerHTML = '<p class="text-muted">خطا در بارگذاری آمار</p>';
   }
 }
 
-// ── Tree sidebar ────────────────────────────────────────
+// ── داشبورد گروه ───────────────────────────────────────
+async function loadGroupDashboard(gid) {
+  hideMainPanels();
+  const el = document.getElementById('groupDetailPanel');
+  el.style.display = 'block';
+  const g = groups.find(x => x.id === gid);
+  if (!g) return;
+  el.innerHTML = '<div class="text-muted py-3"><i class="bi bi-hourglass-split spin"></i></div>';
+  try {
+    const s = await (await fetch(`/api/dashboard/stats?group_id=${encodeURIComponent(gid)}`)).json();
+    const topics = tgTopicsByGroup[gid] || [];
+    const topicMini = (s.topic_list || []).map(t => {
+      const tg = topics.find(x => x.id === t.topic_id);
+      const name = tg?.title || t.name || `Topic ${t.topic_id}`;
+      return `<div class="topic-mini-row" onclick="selectTopic('${gid}',${t.topic_id})">
+        <span><i class="bi bi-hash text-primary me-1"></i>${esc(name)}</span>
+        <span class="text-muted">${t.sources} سورس</span></div>`;
+    }).join('') || '<p class="text-muted small mb-0">هنوز Topic با سورس ندارید.</p>';
+    el.innerHTML = `
+      <div class="group-profile-hdr">
+        <div class="group-profile-icon"><i class="bi bi-people-fill"></i></div>
+        <div style="flex:1">
+          <h5 class="mb-1" style="font-weight:700">${esc(g.title)}</h5>
+          <div class="text-muted" style="font-size:.8rem">ID: <span dir="ltr">${esc(g.telegram_id)}</span>
+            · ${g.origin === 'created' ? 'ساخته‌شده در TeleFilter' : 'متصل از تلگرام'}</div>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="goHome()"><i class="bi bi-grid me-1"></i>داشبورد کل</button>
+      </div>
+      <div class="dash-grid">
+        <div class="dash-card"><div class="dash-num">${s.topics || 0}</div><div class="dash-lbl">Topic</div></div>
+        <div class="dash-card"><div class="dash-num">${s.sources || 0}</div><div class="dash-lbl">سورس</div></div>
+        <div class="dash-card"><div class="dash-num">${s.filters || 0}</div><div class="dash-lbl">فیلتر</div></div>
+        <div class="dash-card accent"><div class="dash-num">${s.forwards_today || 0}</div><div class="dash-lbl">فوروارد امروز</div></div>
+        <div class="dash-card"><div class="dash-num">${s.forwards_total || 0}</div><div class="dash-lbl">فوروارد این گروه</div></div>
+        <div class="dash-card"><div class="dash-num">${topics.length}</div><div class="dash-lbl">Topic در تلگرام</div></div>
+      </div>
+      <div class="dash-chart-box mb-3">
+        <div class="dash-chart-title"><i class="bi bi-bar-chart-fill"></i> فوروارد این گروه — ۷ روز</div>
+        <div class="dash-chart">${chartHtml(s.chart)}</div>
+      </div>
+      <div class="topic-mini-list">
+        <h6 style="font-size:.85rem;font-weight:600;color:#334155"><i class="bi bi-hash me-1"></i>Topics و سورس‌ها</h6>
+        ${topicMini}
+      </div>`;
+  } catch {
+    el.innerHTML = '<p class="text-danger">خطا در بارگذاری</p>';
+  }
+}
+
+// ── Tree sidebar (آکاردئون) ───────────────────────────
+function toggleGroupExpand(gid, ev) {
+  if (ev) ev.stopPropagation();
+  if (expandedGroups.has(gid)) expandedGroups.delete(gid);
+  else {
+    expandedGroups.add(gid);
+    syncTopicsForGroup(gid);
+  }
+  renderTree();
+}
+
 function renderTree() {
   const el = document.getElementById('treeList');
   if (needsApi) {
-    el.innerHTML = '<div class="sidebar-msg"><i class="bi bi-key-fill"></i>ابتدا API خود را در راه‌اندازی وارد کنید.</div>';
+    el.innerHTML = '<div class="sidebar-msg"><i class="bi bi-key-fill"></i>API توسط ادمین سرور تنظیم نشده.</div>';
     return;
   }
   if (needsTelethon) {
@@ -227,6 +247,8 @@ function renderTree() {
   }
   el.innerHTML = groups.map(g => {
     const topics = tgTopicsByGroup[g.id] || [];
+    const isOpen = expandedGroups.has(g.id);
+    const gActive = selGroupId === g.id && !selTopicId;
     const topicRows = topics.map(t => {
       const cnt = (cfgMap[cfgKey(g.id, t.id)] || {}).sources?.length || 0;
       const active = selGroupId === g.id && selTopicId === t.id;
@@ -234,13 +256,19 @@ function renderTree() {
         <div class="t-name">${esc(t.title)}</div>
         <span class="t-src-badge ${cnt ? '' : 'empty'}">${cnt ? cnt + ' سورس' : '—'}</span></div>`;
     }).join('');
-    const gActive = selGroupId === g.id && !selTopicId;
     return `<div class="group-block">
-      <div class="group-row ${gActive ? 'active' : ''}" onclick="selectGroup('${g.id}')">
-        <i class="bi bi-people-fill"></i>
-        <div style="flex:1;overflow:hidden"><div class="t-name">${esc(g.title)}</div>
-        <div class="t-meta">${g.origin === 'created' ? 'ساخته‌شده' : 'متصل'} · ${topics.length} topic</div></div>
-      </div>${topicRows || '<div class="sidebar-msg" style="padding:.5rem 1rem .5rem 2rem;font-size:.75rem">Topic ندارد</div>'}
+      <div class="group-row ${gActive ? 'active' : ''}">
+        <button type="button" class="group-expand ${isOpen ? 'open' : ''}" onclick="toggleGroupExpand('${g.id}', event)" title="نمایش Topics">
+          <i class="bi bi-chevron-left"></i></button>
+        <button type="button" class="group-title-btn" onclick="selectGroup('${g.id}')">
+          <div class="t-name">${esc(g.title)}</div>
+          <div class="t-meta">${topics.length} topic · ${g.origin === 'created' ? 'ساخته‌شده' : 'متصل'}</div>
+        </button>
+        <div class="group-actions">
+          <button type="button" class="btn-group-mini" title="Topic جدید" onclick="openCreateTopic('${g.id}', event)"><i class="bi bi-hash"></i></button>
+        </div>
+      </div>
+      <div class="topics-collapse ${isOpen ? 'open' : ''}">${topicRows || '<div class="sidebar-msg" style="padding:.45rem 1rem .45rem 2.2rem;font-size:.72rem">Topic ندارد — # را بزنید</div>'}</div>
     </div>`;
   }).join('');
 }
@@ -249,14 +277,13 @@ function selectGroup(gid) {
   selGroupId = gid;
   selTopicId = null;
   renderTree();
-  document.getElementById('dashboardPanel').style.display = '';
-  document.getElementById('topicDetail').style.display = 'none';
-  loadDashboard();
+  loadGroupDashboard(gid);
 }
 
 function selectTopic(gid, tid) {
   selGroupId = gid;
   selTopicId = tid;
+  expandedGroups.add(gid);
   renderTree();
   renderTopicDetail();
 }
@@ -482,21 +509,23 @@ async function ensure_client_refresh() {
 
 // ── Settings ────────────────────────────────────────────
 function openSettings() {
-  document.getElementById('s_api_id').value = apiCfg.api_id;
-  document.getElementById('s_api_hash').value = apiCfg.api_hash;
+  if (!isAdmin) {
+    showToast('API توسط ادمین سرور تنظیم می‌شود', 'warning');
+    return;
+  }
   settingsMdl.show();
 }
 
 function saveSettings() {
-  apiCfg.api_id = document.getElementById('s_api_id').value.trim();
-  apiCfg.api_hash = document.getElementById('s_api_hash').value.trim();
   settingsMdl.hide();
-  markDirty();
 }
 
 // ── Topics ──────────────────────────────────────────────
-function openCreateTopic() {
-  if (!selGroupId) { showToast('ابتدا یک گروه انتخاب کنید', 'warning'); return; }
+function openCreateTopic(gid, ev) {
+  if (ev) ev.stopPropagation();
+  const g = gid || selGroupId;
+  if (!g) { showToast('گروه مشخص نیست', 'warning'); return; }
+  selGroupId = g;
   if (!tgOk) { openTelethonSetup(false); return; }
   document.getElementById('newTopicTitle').value = '';
   createMdl.show();
@@ -596,14 +625,14 @@ function renderFilterRules(si, filters) {
 }
 
 function renderTopicDetail() {
-  document.getElementById('dashboardPanel').style.display = 'none';
+  hideMainPanels();
   const detail = document.getElementById('topicDetail');
   if (!selGroupId || !selTopicId) {
-    detail.style.display = 'none';
-    document.getElementById('dashboardPanel').style.display = '';
+    if (selGroupId) loadGroupDashboard(selGroupId);
+    else loadDashboard();
     return;
   }
-  detail.style.display = '';
+  detail.style.display = 'block';
   const g = groups.find(x => x.id === selGroupId);
   const topics = tgTopicsByGroup[selGroupId] || [];
   const tgt = topics.find(t => t.id === selTopicId);
@@ -617,8 +646,8 @@ function renderTopicDetail() {
         <div class="topic-hdr-title">${esc(title)}</div>
         <div class="topic-hdr-id">${esc(g?.title || '')} · Topic ${selTopicId}</div>
       </div>
-      <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" onclick="goHome()">
-        <i class="bi bi-house me-1"></i>داشبورد</button>
+      <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" onclick="selectGroup('${selGroupId}')">
+        <i class="bi bi-people me-1"></i>پروفایل گروه</button>
     </div>
     <div class="sec-head">
       <h6><i class="bi bi-broadcast-pin"></i> سورس‌ها</h6>
@@ -636,10 +665,8 @@ function renderTopicDetail() {
 }
 
 function goHome() {
+  selGroupId = null;
   selTopicId = null;
-  renderTree();
-  document.getElementById('topicDetail').style.display = 'none';
-  document.getElementById('dashboardPanel').style.display = '';
   loadDashboard();
 }
 
@@ -664,7 +691,7 @@ async function saveAll() {
   const res = await fetch('/api/config', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...apiCfg, groups: outGroups }),
+    body: JSON.stringify({ groups: outGroups }),
   });
   const d = await res.json();
   await loadConfigFromServer();
@@ -748,11 +775,15 @@ async function adminRevoke(uid) {
 async function bootMain() {
   await refreshStatus();
   await loadDashboard();
-  renderTree();
   markClean();
-  if (!needsTelethon && groups.length) await syncAllTopics();
+  if (!needsTelethon && groups.length) {
+    if (groups.length === 1) expandedGroups.add(groups[0].id);
+    await syncAllTopics();
+  }
   setInterval(async () => {
     await refreshStatus();
-    if (!selTopicId) loadDashboard();
-  }, 8000);
+    if (selTopicId) return;
+    if (selGroupId) loadGroupDashboard(selGroupId);
+    else loadDashboard();
+  }, 12000);
 }

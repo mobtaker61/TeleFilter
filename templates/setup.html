@@ -54,9 +54,9 @@
   </div>
 
   <!-- API Telegram -->
-  <div class="step-badge">اختیاری — API پیش‌فرض سرور</div>
-  <h5>API ID و API Hash (اختیاری)</h5>
-  <p class="form-text mb-3">هر کاربر می‌تواند API خود را در پنل وارد کند. این بخش فقط برای پیش‌فرض سرور است.</p>
+  <div class="step-badge">مرحله ۱ — API تلگرام (مشترک همه کاربران)</div>
+  <h5>API ID و API Hash</h5>
+  <p class="form-text mb-3">از <a href="https://my.telegram.org" target="_blank">my.telegram.org</a> — یک‌بار توسط ادمین سرور</p>
   <div class="mb-3">
     <label class="form-label">API ID</label>
     <input type="text" id="api_id" class="form-control" dir="ltr" placeholder="12345678">
@@ -99,8 +99,8 @@ async function doSetup() {
     bot_token: document.getElementById('bot_token').value.trim(),
     bot_username: document.getElementById('bot_username').value.trim(),
   };
-  if (!data.bot_token || !data.bot_username) {
-    showErr('Bot Token و Bot Username الزامی هستند'); return;
+  if (!data.api_id || !data.api_hash || !data.bot_token || !data.bot_username) {
+    showErr('API و Bot الزامی هستند'); return;
   }
   const btn = document.getElementById('setupBtn');
   btn.disabled = true;
