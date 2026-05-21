@@ -144,8 +144,30 @@ def user_dir(tg_id: int) -> str:
 def user_config_path(tg_id: int) -> str:
     return os.path.join(user_dir(tg_id), 'config.json')
 
-def user_session_path(tg_id: int, kind: str) -> str:
-    return os.path.join(user_dir(tg_id), f'{kind}.session')
+def user_session_path(tg_id: int, kind: str = 'telefilter') -> str:
+    """مسیر پایه session (بدون پسوند) — Telethon خودش .session اضافه می‌کند."""
+    return os.path.join(user_dir(tg_id), kind)
+
+def _session_file(uid: int, kind: str = 'telefilter') -> str:
+    return user_session_path(uid, kind) + '.session'
+
+def _migrate_panel_session(uid: int):
+    """نسخه‌های قدیم panel.session را به telefilter منتقل می‌کند."""
+    tele = _session_file(uid, 'telefilter')
+    panel = _session_file(uid, 'panel')
+    if os.path.exists(tele):
+        return
+    if not os.path.exists(panel):
+        return
+    import shutil
+    shutil.copy2(panel, tele)
+    journal = panel + '-journal'
+    if os.path.exists(journal):
+        shutil.copy2(journal, tele + '-journal')
+
+def session_on_disk(uid: int) -> bool:
+    _migrate_panel_session(uid)
+    return os.path.exists(_session_file(uid))
 
 def load_user_config(tg_id: int) -> dict:
     try:
@@ -243,11 +265,15 @@ def _stop_fwd(uid: int):
         except subprocess.TimeoutExpired: p.kill()
     _fwd_procs[uid] = None
 
-def start_fwd(uid: int):
+def start_fwd(uid: int) -> bool:
+    """فوروارد را اجرا می‌کند؛ اگر session وجود نداشته باشد False برمی‌گرداند."""
+    if not session_on_disk(uid):
+        _logs(uid).append('— forwarder skipped: no Telegram session (login in panel) —')
+        return False
     with _fwd_lock:
         _stop_fwd(uid)
         cfg  = user_config_path(uid)
-        sess = user_session_path(uid, 'telefilter')
+        sess = user_session_path(uid)
         _logs(uid).append('— starting forwarder —')
         proc = subprocess.Popen(
             [sys.executable, MAIN_SCRIPT, '--config', cfg, '--session', sess],
@@ -256,6 +282,43 @@ def start_fwd(uid: int):
         )
         _fwd_procs[uid] = proc
         threading.Thread(target=_log_reader, args=(proc, uid), daemon=True).start()
+    return True
+
+def auto_start_fwd(uid: int):
+    """اگر کاربر تأیید شده و به تلگرام وصل است، فوروارد را خودکار بالا بیاور."""
+    user = db_get_user(uid)
+    if not user or not user['is_approved']:
+        return
+    if not tg_ok(uid):
+        return
+    if fwd_status(uid) == 'running':
+        return
+    start_fwd(uid)
+
+def _auto_start_all():
+    for u in db_all_users():
+        if u['is_approved']:
+            ensure_client(u['tg_id'])
+            auto_start_fwd(u['tg_id'])
+
+def _fwd_watchdog():
+    while True:
+        time.sleep(25)
+        for u in db_all_users():
+            if not u['is_approved']:
+                continue
+            uid = u['tg_id']
+            if not session_on_disk(uid):
+                continue
+            st = fwd_status(uid)
+            if st != 'running':
+                auto_start_fwd(uid)
+
+threading.Thread(
+    target=lambda: (time.sleep(3), _auto_start_all()),
+    daemon=True, name='fwd-boot'
+).start()
+threading.Thread(target=_fwd_watchdog, daemon=True, name='fwd-watchdog').start()
 
 def stop_fwd(uid: int):
     with _fwd_lock: _stop_fwd(uid)
@@ -286,7 +349,8 @@ def _make_client(uid: int) -> TelegramClient | None:
     if old:
         try: asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=5)
         except Exception: pass
-    client = TelegramClient(user_session_path(uid, 'panel'), m['api_id'], m['api_hash'], loop=_tg_loop)
+    _migrate_panel_session(uid)
+    client = TelegramClient(user_session_path(uid), m['api_id'], m['api_hash'], loop=_tg_loop)
     _tg_clients[uid]   = client
     _tg_connected[uid] = False
     if uid not in _tg_auth:
@@ -380,6 +444,7 @@ def auth_telegram():
     # اگر کاربر approved است، client را lazy init کن
     if user['is_approved']:
         ensure_client(uid)
+        auto_start_fwd(uid)
 
     return jsonify({'ok': True, 'approved': bool(user['is_approved'])})
 
@@ -399,6 +464,9 @@ def index():
     user = db_get_user(cur_uid())
     if not user or not user['is_approved']:
         return render_template('pending.html', user=user)
+    uid = cur_uid()
+    ensure_client(uid)
+    auto_start_fwd(uid)
     return render_template('index.html', user=user)
 
 # ══════════════════════════════════════════════════════════
@@ -416,8 +484,8 @@ def update_config():
     data = request.get_json()
     save_user_config(uid, data)
     was_running = fwd_status(uid) == 'running'
-    if was_running:
-        start_fwd(uid)
+    if was_running or tg_ok(uid):
+        auto_start_fwd(uid)
     return jsonify({'ok': True, 'restarted': was_running})
 
 @app.route('/api/status')
@@ -431,6 +499,8 @@ def get_status():
         'has_forum_api': HAS_FORUM_API,
         'auth_phase':    _tg_auth.get(uid, {}).get('phase', 'idle'),
         'bot':           fwd_status(uid),
+        'auto_forwarder': True,
+        'has_session':   session_on_disk(uid),
     })
 
 # ══════════════════════════════════════════════════════════
@@ -497,6 +567,7 @@ def auth_verify_code():
                          phone_code_hash=_tg_auth[uid]['phone_code_hash']))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
+        auto_start_fwd(uid)
         return jsonify({'ok': True})
     except PhoneCodeInvalidError:
         return jsonify({'error': 'کد اشتباه است'}), 400
@@ -516,6 +587,7 @@ def auth_verify_2fa():
         tg_run(c.sign_in(password=pw))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
+        auto_start_fwd(uid)
         return jsonify({'ok': True})
     except PasswordHashInvalidError:
         return jsonify({'error': 'رمز اشتباه است'}), 400
@@ -598,6 +670,8 @@ def admin_list_users():
 def admin_approve(uid: int):
     is_admin = (request.get_json() or {}).get('admin', False)
     db_set_approval(uid, approved=True, admin=is_admin)
+    ensure_client(uid)
+    auto_start_fwd(uid)
     return jsonify({'ok': True})
 
 @app.route('/api/admin/users/<int:uid>/revoke', methods=['POST'])

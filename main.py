@@ -155,11 +155,20 @@ async def forward_handler(event):
 
 
 async def main():
-    await client.start()
+    await client.connect()
+    if not await client.is_user_authorized():
+        logger.error(
+            "Session not authorized. Log in via the panel "
+            "(Telegram phone code), then restart."
+        )
+        raise SystemExit(1)
     await setup()
     logger.info("TeleFilter is running. Press Ctrl+C to stop.")
     await client.run_until_disconnected()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

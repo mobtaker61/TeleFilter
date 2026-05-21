@@ -84,7 +84,12 @@
     .main-scroll { flex: 1; overflow-y: auto; padding: 1.75rem 2rem; }
 
     /* ── Bot dashboard (empty state) ─────────── */
-    .bot-dash { max-width: 780px; margin: 0 auto; }
+    .home-welcome { max-width: 520px; margin: 3rem auto; text-align: center; padding: 2rem 1.5rem; }
+    .home-welcome-icon { font-size: 3rem; color: #2563eb; opacity: .35; margin-bottom: 1rem; }
+    .home-welcome h5 { font-weight: 700; color: #1e293b; margin-bottom: .5rem; }
+    .home-welcome p { color: #64748b; font-size: .9rem; margin: 0 0 .35rem; }
+    .home-welcome-hint { font-size: .82rem !important; color: #94a3b8 !important; }
+    .bot-dash { max-width: 780px; margin: 0 auto; display: none; }
     .bot-card { background: #fff; border: 1.5px solid #e2e8f0; border-radius: 16px;
       padding: 1.25rem 1.5rem; display: flex; align-items: center; gap: 1rem;
       margin-bottom: 1rem; }
@@ -273,14 +278,6 @@
     <i class="bi bi-circle-fill dot spin"></i> در حال اتصال…
   </div>
 
-  <div class="topbar-sep"></div>
-
-  <!-- Bot status + toggle -->
-  <div id="botBadge" class="tbadge warn">
-    <i class="bi bi-circle-fill dot"></i> Bot: بررسی…
-  </div>
-  <button id="botToggleBtn" class="btn-bot start" onclick="toggleBot()" style="display:none"></button>
-
   <div class="topbar-right">
     {% if user and user.is_admin %}
     <button class="btn-topbar" onclick="openAdmin()" title="پنل ادمین">
@@ -341,32 +338,12 @@
   <!-- Main -->
   <div class="main">
     <div class="main-scroll" id="mainPanel">
-      <!-- داشبورد bot — پیش‌فرض -->
-      <div class="bot-dash" id="botDash">
-        <div class="bot-card" id="botStatusCard">
-          <div class="bot-icon stopped" id="botCardIcon">⏹</div>
-          <div>
-            <div class="bot-label">TeleFilter Bot</div>
-            <div class="bot-sublabel" id="botCardLabel">متوقف</div>
-          </div>
-          <div class="bot-actions">
-            <button class="btn btn-success btn-sm" id="botDashBtn" style="border-radius:8px"
-              onclick="toggleBot()">
-              <i class="bi bi-play-fill me-1"></i>شروع
-            </button>
-          </div>
-        </div>
-
-        <div class="log-wrap">
-          <div class="log-head">
-            <span><i class="bi bi-terminal-fill"></i> لاگ‌های Bot</span>
-            <button class="btn btn-sm btn-outline-secondary" style="font-size:.73rem;border-radius:7px"
-              onclick="clearLogs()">پاک کردن</button>
-          </div>
-          <div class="log-body" id="logBody">
-            <div class="log-line sep">— منتظر شروع Bot هستیم —</div>
-          </div>
-        </div>
+      <!-- صفحهٔ خوش‌آمد — پیش‌فرض -->
+      <div class="home-welcome" id="homeWelcome">
+        <div class="home-welcome-icon"><i class="bi bi-funnel-fill"></i></div>
+        <h5>TeleFilter</h5>
+        <p id="homeWelcomeText">فوروارد پیام‌ها به‌صورت خودکار در پس‌زمینه اجرا می‌شود.</p>
+        <p class="home-welcome-hint">برای تنظیم سورس و فیلتر، یک Topic از سایدبار انتخاب کنید.</p>
       </div>
 
       <!-- جزئیات Topic -->
@@ -645,8 +622,7 @@
 //  State
 // ═══════════════════════════════════════════════════════
 let tgTopics = [], cfgMap = {}, apiCfg = {}, selId = null;
-let tgOk = false, forumOk = false, botStatus = 'stopped';
-let logPollerTimer = null;
+let tgOk = false, forumOk = false, botStatus = 'stopped', hasSession = false;
 let loginMdl, settingsMdl, createMdl, setupMdl, adminMdl;
 
 // ═══════════════════════════════════════════════════════
@@ -685,7 +661,6 @@ async function bootMain() {
   if (tgOk) await syncTopics();
   else renderSidebar();
   markClean();
-  startLogPoller();
   setInterval(refreshStatus, 4000);
 }
 
@@ -780,8 +755,9 @@ async function refreshStatus() {
     tgOk      = s.connected;
     forumOk   = s.has_forum_api;
     botStatus = s.bot;
+    hasSession = !!s.has_session;
     updateTgBadge();
-    updateBotBadge();
+    updateHomeWelcome();
   } catch { /* silent */ }
 }
 
@@ -798,89 +774,22 @@ function updateTgBadge() {
   }
 }
 
-function updateBotBadge() {
-  const badge  = document.getElementById('botBadge');
-  const btn    = document.getElementById('botToggleBtn');
-  const dashBtn = document.getElementById('botDashBtn');
-  const cardIcon = document.getElementById('botCardIcon');
-  const cardLabel = document.getElementById('botCardLabel');
-
-  btn.style.display = 'flex';
-
-  if (botStatus === 'running') {
-    badge.className = 'tbadge ok';
-    badge.innerHTML = '<i class="bi bi-circle-fill dot"></i> Bot: فعال';
-    btn.className   = 'btn-bot stop';
-    btn.innerHTML   = '<i class="bi bi-stop-fill"></i> توقف';
-    dashBtn.className = 'btn btn-danger btn-sm';
-    dashBtn.innerHTML = '<i class="bi bi-stop-fill me-1"></i>توقف';
-    cardIcon.className = 'bot-icon running'; cardIcon.textContent = '▶';
-    cardLabel.textContent = 'در حال اجرا — پیام‌ها فوروارد می‌شوند';
-  } else if (botStatus.startsWith('crashed')) {
-    badge.className = 'tbadge err';
-    badge.innerHTML = '<i class="bi bi-circle-fill dot"></i> Bot: خطا';
-    btn.className   = 'btn-bot start';
-    btn.innerHTML   = '<i class="bi bi-arrow-clockwise"></i> راه‌اندازی';
-    dashBtn.className = 'btn btn-warning btn-sm';
-    dashBtn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>راه‌اندازی';
-    cardIcon.className = 'bot-icon crashed'; cardIcon.textContent = '⚠';
-    cardLabel.textContent = 'خطا — ' + botStatus;
-  } else {
-    badge.className = 'tbadge warn';
-    badge.innerHTML = '<i class="bi bi-circle-fill dot"></i> Bot: متوقف';
-    btn.className   = 'btn-bot start';
-    btn.innerHTML   = '<i class="bi bi-play-fill"></i> شروع';
-    dashBtn.className = 'btn btn-success btn-sm';
-    dashBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>شروع';
-    cardIcon.className = 'bot-icon stopped'; cardIcon.textContent = '⏹';
-    cardLabel.textContent = 'متوقف';
+function updateHomeWelcome() {
+  const el = document.getElementById('homeWelcomeText');
+  if (!el) return;
+  if (!tgOk) {
+    el.textContent = 'برای فعال‌سازی فوروارد، روی بج قرمز «ورود به تلگرام» کلیک کنید.';
+    return;
   }
-}
-
-// ═══════════════════════════════════════════════════════
-//  Bot controls
-// ═══════════════════════════════════════════════════════
-async function toggleBot() {
-  const endpoint = botStatus === 'running' ? '/api/forwarder/stop' : '/api/forwarder/start';
-  await fetch(endpoint, { method: 'POST' });
-  await refreshStatus();
-  showToast(botStatus === 'running' ? 'Bot شروع به کار کرد' : 'Bot متوقف شد',
-            botStatus === 'running' ? 'success' : 'warning');
-}
-
-// ═══════════════════════════════════════════════════════
-//  Log poller
-// ═══════════════════════════════════════════════════════
-function startLogPoller() {
-  if (logPollerTimer) return;
-  logPollerTimer = setInterval(fetchLogs, 1500);
-  fetchLogs();
-}
-
-let _lastLogCount = 0;
-async function fetchLogs() {
-  try {
-    const data = await (await fetch('/api/forwarder/logs?n=100')).json();
-    if (!data.logs) return;
-    if (data.logs.length === _lastLogCount) return;
-    _lastLogCount = data.logs.length;
-    const box = document.getElementById('logBody');
-    box.innerHTML = data.logs.map(l => `<div class="log-line ${logClass(l)}">${escHtml(l)}</div>`).join('');
-    box.scrollTop = box.scrollHeight;
-  } catch { /* silent */ }
-}
-
-function logClass(line) {
-  if (line.startsWith('—')) return 'sep';
-  if (/ERROR/i.test(line))   return 'error';
-  if (/WARNING/i.test(line)) return 'warning';
-  if (/INFO/i.test(line))    return 'info';
-  return '';
-}
-
-function clearLogs() {
-  _lastLogCount = 0;
-  document.getElementById('logBody').innerHTML = '<div class="log-line sep">— پاک شد —</div>';
+  if (botStatus === 'running') {
+    el.textContent = 'فوروارد فعال است — پیام‌های منطبق به Topics ارسال می‌شوند.';
+  } else if (botStatus.startsWith('crashed')) {
+    el.textContent = 'خطا در فوروارد — پس از ورود به تلگرام، چند ثانیه صبر کنید یا صفحه را رفرش کنید.';
+  } else if (!hasSession) {
+    el.textContent = 'ابتدا با شماره تلفن در تلگرام وارد شوید (بج قرمز بالا).';
+  } else {
+    el.textContent = 'در حال راه‌اندازی فوروارد در پس‌زمینه…';
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -951,8 +860,9 @@ async function doVerify2FA() {
   } catch { showLoginError(3,'خطای شبکه'); setLoginBtn('تأیید رمز', doVerify2FA); }
 }
 async function onLoginSuccess() {
-  tgOk = true; updateTgBadge(); loginMdl.hide();
-  showToast('با موفقیت وارد تلگرام شدی ✓','success');
+  loginMdl.hide();
+  showToast('با موفقیت وارد تلگرام شدی — فوروارد خودکار فعال می‌شود ✓','success');
+  await refreshStatus();
   await syncTopics();
 }
 
@@ -1139,11 +1049,11 @@ function renderSidebar() {
 }
 
 function renderTopicDetail() {
-  const dash   = document.getElementById('botDash');
+  const home   = document.getElementById('homeWelcome');
   const detail = document.getElementById('topicDetail');
 
-  if (!selId) { dash.style.display=''; detail.style.display='none'; return; }
-  dash.style.display='none'; detail.style.display='';
+  if (!selId) { home.style.display=''; detail.style.display='none'; return; }
+  home.style.display='none'; detail.style.display='';
 
   const tgt     = tgTopics.find(t=>t.id===selId);
   const title   = tgt ? tgt.title : `Topic ${selId}`;
@@ -1158,7 +1068,7 @@ function renderTopicDetail() {
       </div>
       <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" style="border-radius:8px;font-size:.78rem"
         onclick="selId=null;renderSidebar();renderTopicDetail()">
-        <i class="bi bi-grid me-1"></i>داشبورد
+        <i class="bi bi-house me-1"></i>صفحه اصلی
       </button>
     </div>
     <div class="sec-head">
