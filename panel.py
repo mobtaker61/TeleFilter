@@ -21,17 +21,29 @@ from functools import wraps
 from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from telethon import TelegramClient
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
-from telethon.tl.types import MessageService
+from telethon.tl.types import MessageService, Channel
+from telethon.utils import get_peer_id
+
+from config_util import (
+    normalize_config, empty_config, find_group, new_group_id,
+    config_stats, dashboard_stats,
+)
 
 try:
     from telethon.tl.functions.messages import GetForumTopicsRequest, CreateForumTopicRequest
+    from telethon.tl.functions.channels import CreateChannelRequest
     HAS_FORUM_API = True
+    HAS_CREATE_CHANNEL = True
 except ImportError:
     try:
-        from telethon.tl.functions.channels import GetForumTopicsRequest, CreateForumTopicRequest
+        from telethon.tl.functions.channels import (
+            GetForumTopicsRequest, CreateForumTopicRequest, CreateChannelRequest,
+        )
         HAS_FORUM_API = True
+        HAS_CREATE_CHANNEL = True
     except ImportError:
         HAS_FORUM_API = False
+        HAS_CREATE_CHANNEL = False
 
 # ══════════════════════════════════════════════════════════
 #  Paths
@@ -60,12 +72,12 @@ def save_master(data: dict):
 
 def master_ready() -> bool:
     m = load_master()
-    return bool(m.get('api_id') and m.get('api_hash') and m.get('bot_token') and m.get('bot_username'))
+    return bool(m.get('bot_token') and m.get('bot_username'))
 
 # ══════════════════════════════════════════════════════════
 #  Flask app  (secret_key از master config می‌آید)
 # ══════════════════════════════════════════════════════════
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='/static')
 
 def _get_secret_key() -> str:
     m = load_master()
@@ -172,19 +184,22 @@ def session_on_disk(uid: int) -> bool:
 def load_user_config(tg_id: int) -> dict:
     try:
         with open(user_config_path(tg_id), 'r', encoding='utf-8') as f:
-            return json.load(f)
+            return normalize_config(json.load(f))
     except Exception:
-        m = load_master()
-        return {'api_id': m.get('api_id',''), 'api_hash': m.get('api_hash',''),
-                'target_group_id': '', 'topics': []}
+        return empty_config()
 
 def save_user_config(tg_id: int, data: dict):
-    # همیشه از api_id/api_hash مشترک استفاده کن
-    m = load_master()
-    data['api_id']   = m.get('api_id',   data.get('api_id', ''))
-    data['api_hash'] = m.get('api_hash', data.get('api_hash', ''))
+    cfg = normalize_config(data)
     with open(user_config_path(tg_id), 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+def user_api_credentials(uid: int) -> tuple[str, str]:
+    cfg = load_user_config(uid)
+    api_id, api_hash = cfg.get('api_id', ''), cfg.get('api_hash', '')
+    if api_id and api_hash:
+        return str(api_id), str(api_hash)
+    m = load_master()
+    return str(m.get('api_id', '')), str(m.get('api_hash', ''))
 
 # ══════════════════════════════════════════════════════════
 #  Telegram Login Widget verification
@@ -276,7 +291,8 @@ def start_fwd(uid: int) -> bool:
         sess = user_session_path(uid)
         _logs(uid).append('— starting forwarder —')
         proc = subprocess.Popen(
-            [sys.executable, MAIN_SCRIPT, '--config', cfg, '--session', sess],
+            [sys.executable, MAIN_SCRIPT, '--config', cfg, '--session', sess,
+             '--user-id', str(uid)],
             cwd=BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding='utf-8', errors='replace', bufsize=1
         )
@@ -285,15 +301,21 @@ def start_fwd(uid: int) -> bool:
     return True
 
 def auto_start_fwd(uid: int):
-    """اگر کاربر تأیید شده و به تلگرام وصل است، فوروارد را خودکار بالا بیاور."""
+    """فوروارد خودکار پس از داشتن session و API (بدون نیاز به کلیک دستی)."""
     user = db_get_user(uid)
     if not user or not user['is_approved']:
         return
-    if not tg_ok(uid):
+    if not session_on_disk(uid):
+        return
+    api_id, api_hash = user_api_credentials(uid)
+    if not api_id or not api_hash:
         return
     if fwd_status(uid) == 'running':
         return
     start_fwd(uid)
+
+def needs_telethon_login(uid: int) -> bool:
+    return not session_on_disk(uid)
 
 def _auto_start_all():
     for u in db_all_users():
@@ -342,15 +364,15 @@ def tg_run(coro, timeout: int = 30):
     return asyncio.run_coroutine_threadsafe(coro, _tg_loop).result(timeout=timeout)
 
 def _make_client(uid: int) -> TelegramClient | None:
-    m = load_master()
-    if not m.get('api_id') or not m.get('api_hash'):
+    api_id, api_hash = user_api_credentials(uid)
+    if not api_id or not api_hash:
         return None
     old = _tg_clients.get(uid)
     if old:
         try: asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=5)
         except Exception: pass
     _migrate_panel_session(uid)
-    client = TelegramClient(user_session_path(uid), m['api_id'], m['api_hash'], loop=_tg_loop)
+    client = TelegramClient(user_session_path(uid), int(api_id), api_hash, loop=_tg_loop)
     _tg_clients[uid]   = client
     _tg_connected[uid] = False
     if uid not in _tg_auth:
@@ -368,6 +390,16 @@ async def _connect(uid: int):
     except Exception as e:
         _tg_connected[uid] = False
         print(f'[TG:{uid}] {e}')
+
+def reset_tg_client(uid: int) -> TelegramClient | None:
+    old = _tg_clients.pop(uid, None)
+    if old:
+        try:
+            asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=5)
+        except Exception:
+            pass
+    _tg_connected[uid] = False
+    return ensure_client(uid)
 
 def ensure_client(uid: int) -> TelegramClient | None:
     if uid not in _tg_clients:
@@ -392,11 +424,14 @@ def setup_page():
 @app.route('/setup', methods=['POST'])
 def do_setup():
     d = request.get_json() or {}
-    required = ('api_id', 'api_hash', 'bot_token', 'bot_username')
+    required = ('bot_token', 'bot_username')
     if not all(d.get(k) for k in required):
-        return jsonify({'error': 'همه فیلدها الزامی‌اند'}), 400
+        return jsonify({'error': 'bot_token و bot_username الزامی‌اند'}), 400
     m = load_master()
     m.update({k: d[k] for k in required})
+    for k in ('api_id', 'api_hash'):
+        if d.get(k):
+            m[k] = d[k]
     if not m.get('secret_key'):
         m['secret_key'] = secrets.token_hex(32)
     save_master(m)
@@ -446,7 +481,13 @@ def auth_telegram():
         ensure_client(uid)
         auto_start_fwd(uid)
 
-    return jsonify({'ok': True, 'approved': bool(user['is_approved'])})
+    cfg = load_user_config(uid)
+    return jsonify({
+        'ok': True,
+        'approved': bool(user['is_approved']),
+        'needs_api': not (cfg.get('api_id') and cfg.get('api_hash')),
+        'needs_telethon': needs_telethon_login(uid),
+    })
 
 @app.route('/logout')
 def logout():
@@ -493,14 +534,18 @@ def update_config():
 def get_status():
     uid = cur_uid()
     ensure_client(uid)
+    cfg = load_user_config(uid)
     return jsonify({
-        'connected':     tg_ok(uid),
-        'has_client':    _tg_clients.get(uid) is not None,
-        'has_forum_api': HAS_FORUM_API,
-        'auth_phase':    _tg_auth.get(uid, {}).get('phase', 'idle'),
-        'bot':           fwd_status(uid),
-        'auto_forwarder': True,
-        'has_session':   session_on_disk(uid),
+        'connected':        tg_ok(uid),
+        'has_client':       _tg_clients.get(uid) is not None,
+        'has_forum_api':    HAS_FORUM_API,
+        'auth_phase':       _tg_auth.get(uid, {}).get('phase', 'idle'),
+        'bot':              fwd_status(uid),
+        'auto_forwarder':   True,
+        'has_session':      session_on_disk(uid),
+        'needs_api':        not (cfg.get('api_id') and cfg.get('api_hash')),
+        'needs_telethon':   needs_telethon_login(uid),
+        'onboarding_done':  bool(cfg.get('api_id') and session_on_disk(uid)),
     })
 
 # ══════════════════════════════════════════════════════════
@@ -567,6 +612,7 @@ def auth_verify_code():
                          phone_code_hash=_tg_auth[uid]['phone_code_hash']))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
+        reset_tg_client(uid)
         auto_start_fwd(uid)
         return jsonify({'ok': True})
     except PhoneCodeInvalidError:
@@ -587,6 +633,7 @@ def auth_verify_2fa():
         tg_run(c.sign_in(password=pw))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
+        reset_tg_client(uid)
         auto_start_fwd(uid)
         return jsonify({'ok': True})
     except PasswordHashInvalidError:
@@ -597,22 +644,160 @@ def auth_verify_2fa():
 # ══════════════════════════════════════════════════════════
 #  Routes — API: Telegram Topics
 # ══════════════════════════════════════════════════════════
+def _group_telegram_id(cfg: dict, group_id: str) -> int | None:
+    g = find_group(cfg, group_id)
+    if not g or not g.get('telegram_id'):
+        return None
+    try:
+        return int(g['telegram_id'])
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route('/api/dashboard/stats')
+@login_required
+def api_dashboard_stats():
+    uid = cur_uid()
+    cfg = load_user_config(uid)
+    stats = config_stats(cfg)
+    stats.update(dashboard_stats(uid))
+    stats['bot'] = fwd_status(uid)
+    stats['connected'] = session_on_disk(uid)
+    return jsonify(stats)
+
+
+@app.route('/api/telegram/dialogs')
+@login_required
+def list_tg_dialogs():
+    uid = cur_uid()
+    if not tg_ok(uid):
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا اتصال تلگرام را تکمیل کن'}), 503
+    cfg = load_user_config(uid)
+    linked = {str(g.get('telegram_id')) for g in cfg.get('groups') or []}
+
+    async def _fetch():
+        items = []
+        async for d in _tg_clients[uid].iter_dialogs(limit=200):
+            ent = d.entity
+            if not isinstance(ent, Channel):
+                continue
+            if not (getattr(ent, 'megagroup', False) or getattr(ent, 'gigagroup', False)):
+                continue
+            tid = str(d.id)
+            items.append({
+                'id': d.id,
+                'title': d.name or tid,
+                'is_forum': bool(getattr(ent, 'forum', False)),
+                'already_linked': tid in linked,
+            })
+        return items
+
+    try:
+        dialogs = tg_run(_fetch(), timeout=60)
+        return jsonify({'dialogs': dialogs})
+    except Exception as e:
+        return jsonify({'error': 'api', 'msg': str(e)}), 500
+
+
+@app.route('/api/groups/link', methods=['POST'])
+@login_required
+def link_group():
+    uid = cur_uid()
+    data = request.get_json() or {}
+    try:
+        telegram_id = int(data.get('telegram_id'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'invalid_id'}), 400
+    title = (data.get('title') or '').strip() or str(telegram_id)
+    cfg = load_user_config(uid)
+    for g in cfg.get('groups') or []:
+        if str(g.get('telegram_id')) == str(telegram_id):
+            return jsonify({'ok': True, 'group': g, 'exists': True})
+    g = {
+        'id': new_group_id(),
+        'title': title,
+        'telegram_id': str(telegram_id),
+        'origin': 'linked',
+        'topics': [],
+    }
+    cfg.setdefault('groups', []).append(g)
+    save_user_config(uid, cfg)
+    auto_start_fwd(uid)
+    return jsonify({'ok': True, 'group': g})
+
+
+@app.route('/api/groups/create', methods=['POST'])
+@login_required
+def create_group():
+    uid = cur_uid()
+    if not tg_ok(uid):
+        return jsonify({'error': 'not_connected'}), 503
+    if not HAS_CREATE_CHANNEL:
+        return jsonify({'error': 'no_api', 'msg': 'telethon upgrade required'}), 501
+    title = (request.get_json() or {}).get('title', '').strip()
+    if not title:
+        return jsonify({'error': 'no_title'}), 400
+
+    async def _create():
+        return await _tg_clients[uid](CreateChannelRequest(
+            title=title,
+            about='TeleFilter',
+            megagroup=True,
+            forum=True,
+        ))
+
+    try:
+        result = tg_run(_create())
+        ch = result.chats[0]
+        telegram_id = get_peer_id(ch)
+        cfg = load_user_config(uid)
+        g = {
+            'id': new_group_id(),
+            'title': title,
+            'telegram_id': str(telegram_id),
+            'origin': 'created',
+            'topics': [],
+        }
+        cfg.setdefault('groups', []).append(g)
+        save_user_config(uid, cfg)
+        auto_start_fwd(uid)
+        return jsonify({'ok': True, 'group': g})
+    except Exception as e:
+        return jsonify({'error': 'api', 'msg': str(e)}), 500
+
+
+@app.route('/api/groups/<group_id>', methods=['DELETE'])
+@login_required
+def delete_group(group_id: str):
+    uid = cur_uid()
+    cfg = load_user_config(uid)
+    before = len(cfg.get('groups') or [])
+    cfg['groups'] = [g for g in cfg.get('groups') or [] if g.get('id') != group_id]
+    if len(cfg['groups']) == before:
+        return jsonify({'error': 'not_found'}), 404
+    save_user_config(uid, cfg)
+    auto_start_fwd(uid)
+    return jsonify({'ok': True})
+
+
 @app.route('/api/telegram/topics', methods=['GET'])
 @login_required
 def get_tg_topics():
     uid = cur_uid()
     if not tg_ok(uid):
-        return jsonify({'error': 'not_connected', 'msg': 'ابتدا وارد تلگرام شو'}), 503
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا اتصال تلگرام را تکمیل کن'}), 503
     if not HAS_FORUM_API:
         return jsonify({'error': 'no_api', 'msg': 'pip install --upgrade telethon'}), 501
+    group_id = request.args.get('group_id', '').strip()
     cfg = load_user_config(uid)
-    try:
-        gid = int(cfg['target_group_id'])
-    except (KeyError, ValueError, TypeError):
-        return jsonify({'error': 'no_group', 'msg': 'target_group_id وارد نشده'}), 400
+    tg_gid = _group_telegram_id(cfg, group_id) if group_id else None
+    if tg_gid is None and cfg.get('groups'):
+        tg_gid = _group_telegram_id(cfg, cfg['groups'][0]['id'])
+    if tg_gid is None:
+        return jsonify({'error': 'no_group', 'msg': 'ابتدا یک گروه اضافه کن'}), 400
     try:
         result = tg_run(_tg_clients[uid](GetForumTopicsRequest(
-            peer=gid, offset_date=None, offset_id=0, offset_topic=0, limit=100, q=None
+            peer=tg_gid, offset_date=None, offset_id=0, offset_topic=0, limit=100, q=None
         )))
         return jsonify({'topics': [{'id': t.id, 'title': t.title} for t in result.topics]})
     except Exception as e:
@@ -623,21 +808,21 @@ def get_tg_topics():
 def create_tg_topic():
     uid = cur_uid()
     if not tg_ok(uid):
-        return jsonify({'error': 'not_connected', 'msg': 'ابتدا وارد تلگرام شو'}), 503
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا اتصال تلگرام را تکمیل کن'}), 503
     if not HAS_FORUM_API:
         return jsonify({'error': 'no_api', 'msg': 'pip install --upgrade telethon'}), 501
     data  = request.get_json() or {}
     title = data.get('title', '').strip()
+    group_id = data.get('group_id', '').strip()
     if not title:
         return jsonify({'error': 'no_title', 'msg': 'عنوان Topic الزامی است'}), 400
     cfg = load_user_config(uid)
-    try:
-        gid = int(cfg['target_group_id'])
-    except (KeyError, ValueError, TypeError):
-        return jsonify({'error': 'no_group', 'msg': 'target_group_id وارد نشده'}), 400
+    tg_gid = _group_telegram_id(cfg, group_id)
+    if tg_gid is None:
+        return jsonify({'error': 'no_group', 'msg': 'گروه انتخاب نشده'}), 400
     try:
         result = tg_run(_tg_clients[uid](CreateForumTopicRequest(
-            peer=gid, title=title, random_id=random.randint(1, 2**31)
+            peer=tg_gid, title=title, random_id=random.randint(1, 2**31)
         )))
         topic_id = None
         for upd in result.updates:
@@ -647,7 +832,7 @@ def create_tg_topic():
         if topic_id is None:
             for upd in result.updates:
                 if hasattr(upd, 'id'): topic_id = upd.id; break
-        return jsonify({'ok': True, 'topic_id': topic_id, 'title': title})
+        return jsonify({'ok': True, 'topic_id': topic_id, 'title': title, 'group_id': group_id})
     except Exception as e:
         return jsonify({'error': 'api', 'msg': str(e)}), 500
 

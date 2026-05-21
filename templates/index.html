@@ -265,6 +265,27 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .sidebar-list::-webkit-scrollbar { width: 4px; }
     .sidebar-list::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 4px; }
+    .group-row { padding: .7rem 1rem; cursor: pointer; border-bottom: 1px solid #f1f5f9;
+      display: flex; align-items: center; gap: .5rem; font-weight: 600; font-size: .86rem; }
+    .group-row:hover, .group-row.active { background: #eff6ff; }
+    .group-row i { color: #2563eb; }
+    .topic-row.child { padding-right: 2rem; padding-left: 1rem; }
+    .dash-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: .75rem; margin-bottom: 1.25rem; }
+    .dash-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1rem; text-align: center; }
+    .dash-card.accent { border-color: #86efac; background: #f0fdf4; }
+    .dash-num { font-size: 1.5rem; font-weight: 700; color: #1e40af; }
+    .dash-lbl { font-size: .75rem; color: #64748b; margin-top: 2px; }
+    .dash-chart-box { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1rem 1.25rem; }
+    .dash-chart-title { font-size: .82rem; font-weight: 600; color: #334155; margin-bottom: .75rem; }
+    .dash-chart { display: flex; align-items: flex-end; gap: 6px; height: 120px; direction: ltr; }
+    .dash-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; }
+    .dash-bar { width: 100%; max-width: 28px; background: linear-gradient(180deg, #3b82f6, #1d4ed8); border-radius: 4px 4px 0 0; min-height: 4px; }
+    .dash-bar-lbl { font-size: .65rem; color: #94a3b8; margin-top: 4px; }
+    .dash-hint { font-size: .82rem; color: #94a3b8; margin-top: 1rem; text-align: center; }
+    .link-row { display: flex; justify-content: space-between; align-items: center; padding: .65rem .5rem;
+      border-bottom: 1px solid #f1f5f9; cursor: pointer; border-radius: 8px; }
+    .link-row:hover:not(.disabled) { background: #f8fafc; }
+    .link-row.disabled { opacity: .5; cursor: default; }
   </style>
 </head>
 <body>
@@ -274,7 +295,7 @@
   <div class="topbar-brand"><i class="bi bi-telegram"></i> TeleFilter</div>
 
   <!-- Telegram connection badge -->
-  <div id="connBadge" class="tbadge loading" onclick="onBadgeClick()" title="وضعیت اتصال تلگرام">
+  <div id="connBadge" class="tbadge loading" title="وضعیت فوروارد">
     <i class="bi bi-circle-fill dot spin"></i> در حال اتصال…
   </div>
 
@@ -314,23 +335,19 @@
 <!-- ══ LAYOUT ════════════════════════════════════════════ -->
 <div class="layout">
 
-  <!-- Sidebar -->
+  <!-- Sidebar: گروه → Topic -->
   <div class="sidebar">
     <div class="sidebar-head">
-      <div class="sidebar-head-title"><i class="bi bi-bookmark-star-fill"></i> Topics</div>
+      <div class="sidebar-head-title"><i class="bi bi-diagram-3-fill"></i> گروه‌ها</div>
       <div class="sidebar-head-btns">
-        <button class="btn btn-sm btn-outline-secondary" id="syncBtn"
-          style="border-radius:7px;padding:3px 8px;font-size:.75rem"
-          onclick="syncTopics()" title="دریافت از تلگرام">
-          <i class="bi bi-arrow-clockwise" id="syncIcon"></i>
-        </button>
-        <button class="btn btn-sm btn-primary" style="border-radius:7px;padding:3px 9px"
-          onclick="openCreateTopic()" title="Topic جدید">
-          <i class="bi bi-plus-lg"></i>
-        </button>
+        <button class="btn btn-sm btn-outline-secondary" style="border-radius:7px;padding:3px 8px;font-size:.75rem"
+          onclick="syncTopics()" title="بروزرسانی Topics"><i class="bi bi-arrow-clockwise" id="syncIcon"></i></button>
+        <button class="btn btn-sm btn-outline-primary" style="border-radius:7px;padding:3px 8px" onclick="openLinkGroup()" title="اتصال گروه"><i class="bi bi-link-45deg"></i></button>
+        <button class="btn btn-sm btn-outline-primary" style="border-radius:7px;padding:3px 8px" onclick="openCreateTopic()" title="Topic جدید"><i class="bi bi-hash"></i></button>
+        <button class="btn btn-sm btn-primary" style="border-radius:7px;padding:3px 9px" onclick="openCreateGroup()" title="گروه Forum جدید"><i class="bi bi-plus-lg"></i></button>
       </div>
     </div>
-    <div class="sidebar-list" id="topicList">
+    <div class="sidebar-list" id="treeList">
       <div class="sidebar-msg"><i class="bi bi-hourglass-split spin"></i>در حال بارگذاری…</div>
     </div>
   </div>
@@ -338,13 +355,7 @@
   <!-- Main -->
   <div class="main">
     <div class="main-scroll" id="mainPanel">
-      <!-- صفحهٔ خوش‌آمد — پیش‌فرض -->
-      <div class="home-welcome" id="homeWelcome">
-        <div class="home-welcome-icon"><i class="bi bi-funnel-fill"></i></div>
-        <h5>TeleFilter</h5>
-        <p id="homeWelcomeText">فوروارد پیام‌ها به‌صورت خودکار در پس‌زمینه اجرا می‌شود.</p>
-        <p class="home-welcome-hint">برای تنظیم سورس و فیلتر، یک Topic از سایدبار انتخاب کنید.</p>
-      </div>
+      <div id="dashboardPanel" class="bot-dash" style="display:block;max-width:720px"></div>
 
       <!-- جزئیات Topic -->
       <div id="topicDetail" style="display:none"></div>
@@ -463,12 +474,6 @@
                   oninput="checkSetupReady()">
                 <div class="form-text">یک رشته ۳۲ کاراکتری</div>
               </div>
-              <div class="mb-2">
-                <label class="form-label">Target Group ID <span style="color:#94a3b8;font-weight:400">(اختیاری — بعداً هم می‌توانی وارد کنی)</span></label>
-                <input type="text" class="form-control" id="setup_group_id" dir="ltr"
-                  placeholder="مثال: -1001234567890">
-                <div class="form-text">ID گروهی که Forum Topics دارد</div>
-              </div>
               <div class="login-error" id="setupErr" style="margin-top:.75rem"></div>
             </div>
           </div>
@@ -506,7 +511,7 @@
           <div class="step-dot" id="sd3">۳</div>
         </div>
         <div class="login-step active" id="lstep1">
-          <p class="text-muted text-center mb-3" style="font-size:.85rem">شماره تلفن اکانت تلگرامت را وارد کن</p>
+          <p class="text-muted text-center mb-3" style="font-size:.85rem" id="loginSubtitle">شماره تلفن اکانت تلگرامت را وارد کن</p>
           <label class="form-label">شماره تلفن</label>
           <input type="tel" class="form-control" id="loginPhone" dir="ltr"
             placeholder="+98912..." onkeydown="if(event.key==='Enter') doSendCode()">
@@ -543,7 +548,7 @@
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-gear-fill me-2" style="color:#2563eb"></i>تنظیمات API</h5>
+        <h5 class="modal-title"><i class="bi bi-gear-fill me-2" style="color:#2563eb"></i>API اختصاصی شما</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -555,11 +560,7 @@
           <label class="form-label">API Hash</label>
           <input type="text" class="form-control font-monospace" id="s_api_hash" dir="ltr">
         </div>
-        <div>
-          <label class="form-label">Target Group ID</label>
-          <input type="text" class="form-control" id="s_group_id" dir="ltr" placeholder="-1001234567890">
-          <div class="form-text">گروهی که Forum Topics دارد</div>
-        </div>
+        <p class="form-text">هر کاربر API و گروه‌های خود را جداگانه مدیریت می‌کند. گروه‌ها از سایدبار اضافه می‌شوند.</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" style="border-radius:9px" onclick="saveSettings()">
@@ -596,6 +597,40 @@
   </div>
 </div>
 
+<!-- ══ MODAL: Link Group ═════════════════════════════════ -->
+<div class="modal fade" id="linkGroupModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-link-45deg me-2"></i>اتصال گروه از تلگرام</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="linkGroupList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: Create Group ═══════════════════════════════ -->
+<div class="modal fade" id="createGroupModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-people-fill me-2"></i>گروه Forum جدید</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">نام گروه</label>
+        <input type="text" class="form-control" id="newGroupTitle" placeholder="مثال: فیلتر قیمت"
+          onkeydown="if(event.key==='Enter') doCreateGroup()">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">انصراف</button>
+        <button class="btn btn-sm btn-primary" id="createGroupBtn" onclick="doCreateGroup()">ساخت در تلگرام</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ MODAL: Admin ══════════════════════════════════════ -->
 <div class="modal fade" id="adminModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -617,584 +652,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-// ═══════════════════════════════════════════════════════
-//  State
-// ═══════════════════════════════════════════════════════
-let tgTopics = [], cfgMap = {}, apiCfg = {}, selId = null;
-let tgOk = false, forumOk = false, botStatus = 'stopped', hasSession = false;
-let loginMdl, settingsMdl, createMdl, setupMdl, adminMdl;
-
-// ═══════════════════════════════════════════════════════
-//  Boot
-// ═══════════════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', async () => {
-  loginMdl    = new bootstrap.Modal(document.getElementById('loginModal'));
-  settingsMdl = new bootstrap.Modal(document.getElementById('settingsModal'));
-  createMdl   = new bootstrap.Modal(document.getElementById('createModal'));
-  setupMdl    = new bootstrap.Modal(document.getElementById('setupModal'));
-  adminMdl    = new bootstrap.Modal(document.getElementById('adminModal'));
-
-  // بستن user menu با کلیک خارج
-  document.addEventListener('click', e => {
-    if (!e.target.closest('#userPill') && !e.target.closest('#userMenu'))
-      document.getElementById('userMenu').style.display = 'none';
-  });
-
-  const cfg = await (await fetch('/api/config')).json();
-  apiCfg = { api_id: cfg.api_id||'', api_hash: cfg.api_hash||'', target_group_id: cfg.target_group_id||'' };
-  cfgMap = buildCfgMap(cfg.topics || []);
-
-  // اگر API وارد نشده، wizard نشان بده
-  if (!apiCfg.api_id || !apiCfg.api_hash) {
-    setupStep = 1;
-    renderSetupStep();
-    setupMdl.show();
-    return;   // بقیه boot بعد از تکمیل wizard
-  }
-
-  await bootMain();
-});
-
-async function bootMain() {
-  await refreshStatus();
-  if (tgOk) await syncTopics();
-  else renderSidebar();
-  markClean();
-  setInterval(refreshStatus, 4000);
-}
-
-// ═══════════════════════════════════════════════════════
-//  Setup Wizard
-// ═══════════════════════════════════════════════════════
-let setupStep = 1;
-
-function renderSetupStep() {
-  [1,2,3].forEach(i => {
-    document.getElementById(`spanel${i}`).classList.toggle('active', i === setupStep);
-    const si = document.getElementById(`sstep${i}`);
-    si.classList.toggle('active', i === setupStep);
-    si.classList.toggle('done', i < setupStep);
-  });
-  // separators
-  document.querySelectorAll('.setup-step-sep').forEach((el, idx) => {
-    el.classList.toggle('done', setupStep > idx + 1);
-  });
-
-  const backBtn = document.getElementById('setupBackBtn');
-  const nextBtn = document.getElementById('setupNextBtn');
-  backBtn.style.display = setupStep > 1 ? 'inline-flex' : 'none';
-
-  if (setupStep === 3) {
-    nextBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i> ذخیره و شروع';
-  } else {
-    nextBtn.innerHTML = 'بعدی <i class="bi bi-arrow-left ms-1"></i>';
-  }
-  checkSetupReady();
-}
-
-function checkSetupReady() {
-  if (setupStep !== 3) return;
-  const ok = document.getElementById('setup_api_id').value.trim() &&
-             document.getElementById('setup_api_hash').value.trim();
-  document.getElementById('setupNextBtn').disabled = !ok;
-}
-
-async function setupNav(dir) {
-  if (setupStep === 3 && dir === 1) {
-    await doSetupSave();
-    return;
-  }
-  setupStep = Math.max(1, Math.min(3, setupStep + dir));
-  renderSetupStep();
-}
-
-async function doSetupSave() {
-  const api_id   = document.getElementById('setup_api_id').value.trim();
-  const api_hash = document.getElementById('setup_api_hash').value.trim();
-  const group_id = document.getElementById('setup_group_id').value.trim();
-
-  const errEl = document.getElementById('setupErr');
-  errEl.style.display = 'none';
-
-  if (!api_id || !api_hash) {
-    errEl.textContent = 'API ID و API Hash الزامی هستند';
-    errEl.style.display = 'block';
-    return;
-  }
-
-  const btn = document.getElementById('setupNextBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="bi bi-hourglass-split spin me-1"></i> در حال ذخیره…';
-
-  try {
-    apiCfg = { api_id, api_hash, target_group_id: group_id };
-    const payload = { ...apiCfg, topics: [] };
-    await fetch('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    setupMdl.hide();
-    showToast('API ذخیره شد — خوش آمدی! ✓', 'success');
-    await bootMain();
-  } catch {
-    errEl.textContent = 'خطا در ذخیره — دوباره تلاش کن';
-    errEl.style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i> ذخیره و شروع';
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-//  Status polling
-// ═══════════════════════════════════════════════════════
-async function refreshStatus() {
-  try {
-    const s = await (await fetch('/api/status')).json();
-    tgOk      = s.connected;
-    forumOk   = s.has_forum_api;
-    botStatus = s.bot;
-    hasSession = !!s.has_session;
-    updateTgBadge();
-    updateHomeWelcome();
-  } catch { /* silent */ }
-}
-
-function updateTgBadge() {
-  const b = document.getElementById('connBadge');
-  if (tgOk) {
-    b.className = 'tbadge ok';
-    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> متصل به تلگرام';
-    b.title = '';
-  } else {
-    b.className = 'tbadge err';
-    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> قطع — کلیک برای ورود';
-    b.title = 'ورود به تلگرام';
-  }
-}
-
-function updateHomeWelcome() {
-  const el = document.getElementById('homeWelcomeText');
-  if (!el) return;
-  if (!tgOk) {
-    el.textContent = 'برای فعال‌سازی فوروارد، روی بج قرمز «ورود به تلگرام» کلیک کنید.';
-    return;
-  }
-  if (botStatus === 'running') {
-    el.textContent = 'فوروارد فعال است — پیام‌های منطبق به Topics ارسال می‌شوند.';
-  } else if (botStatus.startsWith('crashed')) {
-    el.textContent = 'خطا در فوروارد — پس از ورود به تلگرام، چند ثانیه صبر کنید یا صفحه را رفرش کنید.';
-  } else if (!hasSession) {
-    el.textContent = 'ابتدا با شماره تلفن در تلگرام وارد شوید (بج قرمز بالا).';
-  } else {
-    el.textContent = 'در حال راه‌اندازی فوروارد در پس‌زمینه…';
-  }
-}
-
-// ═══════════════════════════════════════════════════════
-//  Login
-// ═══════════════════════════════════════════════════════
-function onBadgeClick() { if (!tgOk) openLogin(); }
-function openLogin() {
-  showLoginStep(1);
-  ['loginPhone','loginCode','login2fa'].forEach(id => document.getElementById(id).value = '');
-  hideLoginErrors();
-  setLoginBtn('ارسال کد', doSendCode);
-  loginMdl.show();
-  setTimeout(() => document.getElementById('loginPhone').focus(), 300);
-}
-function showLoginStep(n) {
-  [1,2,3].forEach(i => {
-    document.getElementById(`lstep${i}`).classList.toggle('active', i===n);
-    const d = document.getElementById(`sd${i}`);
-    d.classList.toggle('active', i===n); d.classList.toggle('done', i<n);
-  });
-  document.getElementById('sl1').classList.toggle('done', n>1);
-  document.getElementById('sl2').classList.toggle('done', n>2);
-}
-function setLoginBtn(label, fn) {
-  const b = document.getElementById('loginBtn');
-  b.innerHTML = `<i class="bi bi-send me-1"></i> ${label}`;
-  b.onclick = fn; b.disabled = false;
-}
-function setBtnLoading(msg) {
-  const b = document.getElementById('loginBtn');
-  b.innerHTML = `<i class="bi bi-hourglass-split spin me-1"></i> ${msg}`;
-  b.disabled = true;
-}
-function showLoginError(step, msg) {
-  const e = document.getElementById(`err${step}`); e.textContent = msg; e.style.display = 'block';
-}
-function hideLoginErrors() { [1,2,3].forEach(i => document.getElementById(`err${i}`).style.display='none'); }
-
-async function doSendCode() {
-  const phone = document.getElementById('loginPhone').value.trim();
-  if (!phone) { showLoginError(1,'شماره تلفن را وارد کن'); return; }
-  hideLoginErrors(); setBtnLoading('در حال ارسال کد…');
-  try {
-    const d = await (await fetch('/api/auth/send_code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})})).json();
-    if (d.ok) { showLoginStep(2); setLoginBtn('تأیید کد', doVerifyCode); setTimeout(()=>document.getElementById('loginCode').focus(),100); }
-    else { showLoginError(1, d.error||'خطا'); setLoginBtn('ارسال کد', doSendCode); }
-  } catch { showLoginError(1,'خطای شبکه'); setLoginBtn('ارسال کد', doSendCode); }
-}
-async function doVerifyCode() {
-  const code = document.getElementById('loginCode').value.trim();
-  if (!code) { showLoginError(2,'کد را وارد کن'); return; }
-  hideLoginErrors(); setBtnLoading('در حال تأیید…');
-  try {
-    const d = await (await fetch('/api/auth/verify_code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})).json();
-    if (d.ok) { await onLoginSuccess(); }
-    else if (d.need_2fa) { showLoginStep(3); setLoginBtn('تأیید رمز', doVerify2FA); setTimeout(()=>document.getElementById('login2fa').focus(),100); }
-    else { showLoginError(2, d.error||'خطا'); setLoginBtn('تأیید کد', doVerifyCode); }
-  } catch { showLoginError(2,'خطای شبکه'); setLoginBtn('تأیید کد', doVerifyCode); }
-}
-async function doVerify2FA() {
-  const pw = document.getElementById('login2fa').value;
-  if (!pw) { showLoginError(3,'رمز را وارد کن'); return; }
-  hideLoginErrors(); setBtnLoading('در حال تأیید…');
-  try {
-    const d = await (await fetch('/api/auth/verify_2fa',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})})).json();
-    if (d.ok) { await onLoginSuccess(); }
-    else { showLoginError(3, d.error||'رمز اشتباه'); setLoginBtn('تأیید رمز', doVerify2FA); }
-  } catch { showLoginError(3,'خطای شبکه'); setLoginBtn('تأیید رمز', doVerify2FA); }
-}
-async function onLoginSuccess() {
-  loginMdl.hide();
-  showToast('با موفقیت وارد تلگرام شدی — فوروارد خودکار فعال می‌شود ✓','success');
-  await refreshStatus();
-  await syncTopics();
-}
-
-// ═══════════════════════════════════════════════════════
-//  Settings
-// ═══════════════════════════════════════════════════════
-function openSettings() {
-  document.getElementById('s_api_id').value   = apiCfg.api_id;
-  document.getElementById('s_api_hash').value = apiCfg.api_hash;
-  document.getElementById('s_group_id').value = apiCfg.target_group_id;
-  settingsMdl.show();
-}
-function saveSettings() {
-  apiCfg.api_id          = document.getElementById('s_api_id').value.trim();
-  apiCfg.api_hash        = document.getElementById('s_api_hash').value.trim();
-  apiCfg.target_group_id = document.getElementById('s_group_id').value.trim();
-  settingsMdl.hide(); markDirty();
-}
-
-// ═══════════════════════════════════════════════════════
-//  Telegram topics
-// ═══════════════════════════════════════════════════════
-async function syncTopics() {
-  const icon = document.getElementById('syncIcon');
-  icon.className = 'bi bi-arrow-clockwise spin';
-  if (!tgOk || !forumOk) { renderSidebar(); icon.className='bi bi-arrow-clockwise'; return; }
-  try {
-    const d = await (await fetch('/api/telegram/topics')).json();
-    if (d.topics) tgTopics = d.topics;
-    else showToast(d.msg||'خطا','danger');
-  } catch { showToast('خطای شبکه','danger'); }
-  renderSidebar();
-  icon.className = 'bi bi-arrow-clockwise';
-}
-function openCreateTopic() {
-  if (!tgOk)    { showToast('ابتدا وارد تلگرام شو','warning'); return; }
-  if (!forumOk) { showToast('pip install --upgrade telethon','warning'); return; }
-  document.getElementById('newTopicTitle').value = '';
-  createMdl.show();
-  setTimeout(()=>document.getElementById('newTopicTitle').focus(),300);
-}
-async function doCreateTopic() {
-  const title = document.getElementById('newTopicTitle').value.trim(); if (!title) return;
-  const btn = document.getElementById('createBtn');
-  btn.disabled=true; btn.innerHTML='<i class="bi bi-hourglass-split spin me-1"></i>در حال ساخت…';
-  try {
-    const d = await (await fetch('/api/telegram/topics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title})})).json();
-    if (d.ok && d.topic_id) {
-      tgTopics.unshift({id:d.topic_id,title:d.title});
-      createMdl.hide(); renderSidebar(); selectTopic(d.topic_id);
-      showToast(`Topic «${d.title}» ساخته شد ✓`,'success');
-    } else showToast(d.msg||'خطا','danger');
-  } catch { showToast('خطای شبکه','danger'); }
-  btn.disabled=false; btn.innerHTML='<i class="bi bi-telegram me-1"></i>ساخت در تلگرام';
-}
-function selectTopic(id) { selId=id; renderSidebar(); renderTopicDetail(); }
-
-// ═══════════════════════════════════════════════════════
-//  Sources & Filters
-// ═══════════════════════════════════════════════════════
-function ensureCfg(id) { if (!cfgMap[id]) cfgMap[id]={sources:[]}; return cfgMap[id]; }
-
-function addSource() {
-  ensureCfg(selId).sources.push({chat:'', filters:[]});
-  renderTopicDetail(); markDirty();
-  setTimeout(()=>{ const inp=document.querySelectorAll('.src-top input'); if(inp.length) inp[inp.length-1].focus(); },50);
-}
-function deleteSource(si) { ensureCfg(selId).sources.splice(si,1); renderTopicDetail(); markDirty(); }
-function updateChat(si,val) { ensureCfg(selId).sources[si].chat=val; markDirty(); }
-
-// هر rule یک آرایه از عبارات است (AND). بین rule‌ها OR است.
-function addFilterRule(si) {
-  ensureCfg(selId).sources[si].filters.push([]);
-  renderTopicDetail(); markDirty();
-  setTimeout(()=>{
-    const inputs = document.querySelectorAll(`.filter-input[data-si="${si}"]`);
-    if(inputs.length) inputs[inputs.length-1].focus();
-  }, 50);
-}
-function deleteFilterRule(si, ri) {
-  ensureCfg(selId).sources[si].filters.splice(ri, 1);
-  renderTopicDetail(); markDirty();
-}
-function onPhraseKey(e, si, ri) {
-  if (e.key !== 'Enter') return;
-  const phrase = e.target.value.trim(); if (!phrase) return;
-  ensureCfg(selId).sources[si].filters[ri].push(phrase);
-  e.target.value = '';
-  renderTopicDetail(); markDirty();
-  setTimeout(()=>{
-    const inputs = document.querySelectorAll(`.filter-input[data-si="${si}"][data-ri="${ri}"]`);
-    if(inputs.length) inputs[0].focus();
-  }, 40);
-}
-function deletePhrase(si, ri, pi) {
-  const rule = ensureCfg(selId).sources[si].filters[ri];
-  rule.splice(pi, 1);
-  if (rule.length === 0) {
-    ensureCfg(selId).sources[si].filters.splice(ri, 1);
-  }
-  renderTopicDetail(); markDirty();
-}
-
-function renderFilterRules(si, filters) {
-  if (!filters || filters.length === 0) {
-    return `<div class="filter-rules-wrap">
-      <div class="rule-row">
-        <span class="all-badge"><i class="bi bi-asterisk me-1"></i>همه پیام‌ها</span>
-        <button class="btn-add-rule" onclick="addFilterRule(${si})"><i class="bi bi-plus me-1"></i>افزودن فیلتر</button>
-      </div>
-    </div>`;
-  }
-  const rulesHtml = filters.map((rule, ri) => {
-    const phrases = rule.map((phrase, pi) =>
-      `<span class="filter-tag">${esc(phrase)}<button onclick="deletePhrase(${si},${ri},${pi})"><i class="bi bi-x"></i></button></span>`
-    ).join(ri > 0 || rule.indexOf(rule[0]) > 0 ? '' : '');
-    // AND badges between phrases
-    const phrasesWithAnd = rule.map((phrase, pi) =>
-      (pi > 0 ? `<span class="rule-and-badge">و</span>` : '') +
-      `<span class="filter-tag">${esc(phrase)}<button onclick="deletePhrase(${si},${ri},${pi})"><i class="bi bi-x"></i></button></span>`
-    ).join('');
-    return `
-      ${ri > 0 ? `<div class="rule-row"><span class="rule-or-badge">── یا ──</span></div>` : ''}
-      <div class="rule-row">
-        ${phrasesWithAnd}
-        <input class="filter-input" data-si="${si}" data-ri="${ri}"
-          placeholder="عبارت… Enter" onkeydown="onPhraseKey(event,${si},${ri})">
-        <button class="btn-del-rule" onclick="deleteFilterRule(${si},${ri})" title="حذف این قانون"><i class="bi bi-trash3"></i></button>
-      </div>`;
-  }).join('');
-
-  return `<div class="filter-rules-wrap">
-    <div class="filter-rules-head">
-      <span class="filter-lbl">قوانین فیلتر: <small>(داخل هر قانون = همه عبارات &nbsp;|&nbsp; بین قوانین = هر کدام)</small></span>
-    </div>
-    ${rulesHtml}
-    <div class="rule-row" style="margin-top:.3rem">
-      <button class="btn-add-rule" onclick="addFilterRule(${si})"><i class="bi bi-plus me-1"></i>قانون جدید (یا)</button>
-    </div>
-  </div>`;
-}
-
-// ═══════════════════════════════════════════════════════
-//  Save
-// ═══════════════════════════════════════════════════════
-async function saveAll() {
-  const topics = [];
-  for (const [idStr,data] of Object.entries(cfgMap)) {
-    if (data.sources?.length>0) {
-      const id=parseInt(idStr); const tgt=tgTopics.find(t=>t.id===id);
-      topics.push({topic_id:id, name:tgt?.title||'', sources:data.sources});
-    }
-  }
-  const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...apiCfg,topics})});
-  const d   = await res.json();
-  markClean();
-  showToast(d.restarted ? 'ذخیره شد — Bot ری‌استارت شد ✓' : 'تغییرات ذخیره شد ✓', 'success');
-}
-
-// ═══════════════════════════════════════════════════════
-//  Render
-// ═══════════════════════════════════════════════════════
-function renderSidebar() {
-  const el = document.getElementById('topicList');
-  if (!tgOk) {
-    el.innerHTML=`<div class="sidebar-msg"><i class="bi bi-plug-fill" style="color:#fca5a5"></i>روی بج قرمز بالا کلیک کن.</div>`;return;
-  }
-  if (!forumOk) {
-    el.innerHTML=`<div class="sidebar-msg"><i class="bi bi-exclamation-triangle-fill" style="color:#fde68a"></i><code>pip install --upgrade telethon</code></div>`;return;
-  }
-  if (!tgTopics.length) {
-    el.innerHTML=`<div class="sidebar-msg"><i class="bi bi-inbox"></i>گروه Topic ندارد.</div>`;return;
-  }
-  el.innerHTML = tgTopics.map(t => {
-    const cnt = cfgMap[t.id]?.sources?.length||0;
-    return `<div class="topic-row ${t.id===selId?'active':''}" onclick="selectTopic(${t.id})">
-      <div style="overflow:hidden;flex:1">
-        <div class="t-name">${esc(t.title)}</div>
-        <div class="t-meta">ID: ${t.id}</div>
-      </div>
-      <span class="t-src-badge ${cnt?'':'empty'}">${cnt?cnt+' سورس':'بدون سورس'}</span>
-    </div>`;
-  }).join('');
-}
-
-function renderTopicDetail() {
-  const home   = document.getElementById('homeWelcome');
-  const detail = document.getElementById('topicDetail');
-
-  if (!selId) { home.style.display=''; detail.style.display='none'; return; }
-  home.style.display='none'; detail.style.display='';
-
-  const tgt     = tgTopics.find(t=>t.id===selId);
-  const title   = tgt ? tgt.title : `Topic ${selId}`;
-  const sources = cfgMap[selId]?.sources || [];
-
-  detail.innerHTML = `
-    <div class="topic-hdr">
-      <div class="topic-hdr-icon"><i class="bi bi-hash"></i></div>
-      <div>
-        <div class="topic-hdr-title">${esc(title)}</div>
-        <div class="topic-hdr-id">Topic ID: ${selId}</div>
-      </div>
-      <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" style="border-radius:8px;font-size:.78rem"
-        onclick="selId=null;renderSidebar();renderTopicDetail()">
-        <i class="bi bi-house me-1"></i>صفحه اصلی
-      </button>
-    </div>
-    <div class="sec-head">
-      <h6><i class="bi bi-broadcast-pin"></i> سورس‌ها</h6>
-      <button class="btn btn-sm btn-outline-primary" style="border-radius:8px;font-size:.8rem" onclick="addSource()">
-        <i class="bi bi-plus-lg me-1"></i>افزودن سورس
-      </button>
-    </div>
-    ${sources.length===0 ? `<div class="no-sources"><i class="bi bi-inbox"></i>هنوز سورسی اضافه نشده.</div>`
-    : sources.map((src,si) => `
-      <div class="source-card">
-        <div class="src-top">
-          <i class="bi bi-telegram"></i>
-          <input type="text" dir="ltr" value="${esc(src.chat||'')}"
-            onchange="updateChat(${si},this.value)" placeholder="@username  یا  Chat ID">
-          <button class="src-del" onclick="deleteSource(${si})"><i class="bi bi-x-circle-fill"></i></button>
-        </div>
-        ${renderFilterRules(si, src.filters||[])}
-      </div>`).join('')}
-    ${sources.length>0?`<button class="btn-add-src" onclick="addSource()"><i class="bi bi-plus-circle"></i> افزودن سورس دیگر</button>`:''}
-  `;
-}
-
-// ═══════════════════════════════════════════════════════
-//  Utils
-// ═══════════════════════════════════════════════════════
-function normalizeFilters(filters) {
-  // فرمت قدیمی: ["عبارت۱", "عبارت۲"] → [["عبارت۱"], ["عبارت۲"]]
-  // فرمت جدید: [["عبارت۱", "عبارت۲"], ["عبارت۳"]] → بدون تغییر
-  if (!filters || filters.length === 0) return [];
-  if (typeof filters[0] === 'string') return filters.map(f => [f]);
-  return filters;
-}
-function buildCfgMap(topics) {
-  const m = {};
-  for (const t of topics) {
-    const sources = (t.sources || []).map(s => ({
-      chat: s.chat || '',
-      filters: normalizeFilters(s.filters)
-    }));
-    m[t.topic_id] = { sources };
-  }
-  return m;
-}
-function markDirty() { const b=document.getElementById('saveBtn'); b.className='btn-save dirty'; b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات *'; }
-function markClean() { const b=document.getElementById('saveBtn'); b.className='btn-save'; b.innerHTML='<i class="bi bi-floppy-fill"></i> ذخیره تغییرات'; }
-function showToast(msg,type='success') {
-  const b=document.getElementById('toastBox');
-  b.style.background={success:'#16a34a',danger:'#dc2626',warning:'#d97706'}[type]||'#1e40af';
-  b.textContent=msg; b.style.display='block';
-  setTimeout(()=>b.style.display='none',3000);
-}
-function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function escHtml(s) { return esc(s); }
-
-// ═══════════════════════════════════════════════════════
-//  User menu
-// ═══════════════════════════════════════════════════════
-function toggleUserMenu() {
-  const m = document.getElementById('userMenu');
-  m.style.display = m.style.display === 'none' ? 'block' : 'none';
-}
-
-// ═══════════════════════════════════════════════════════
-//  Admin panel
-// ═══════════════════════════════════════════════════════
-async function openAdmin() {
-  adminMdl.show();
-  await loadAdminUsers();
-}
-
-async function loadAdminUsers() {
-  const body = document.getElementById('adminBody');
-  body.innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass-split spin me-2"></i>در حال بارگذاری…</div>';
-  try {
-    const d = await (await fetch('/api/admin/users')).json();
-    if (!d.users) { body.innerHTML = '<p class="text-danger">خطا</p>'; return; }
-    if (!d.users.length) { body.innerHTML = '<p class="text-muted text-center py-3">کاربری وجود ندارد</p>'; return; }
-
-    body.innerHTML = d.users.map(u => `
-      <div class="admin-user-row">
-        <div class="admin-avatar">
-          ${u.photo_url ? `<img src="${esc(u.photo_url)}" alt="">` : '<i class="bi bi-person-fill"></i>'}
-        </div>
-        <div class="admin-user-info">
-          <div class="admin-user-name">${esc(u.first_name)} ${esc(u.last_name||'')}
-            ${u.is_admin ? '<span class="admin-badge bg-primary text-white ms-1">ادمین</span>' : ''}
-          </div>
-          <div class="admin-user-meta">
-            @${esc(u.username||'—')} &nbsp;·&nbsp; ID: ${u.tg_id}
-            &nbsp;·&nbsp;
-            <span style="color:${u.bot_status==='running'?'#16a34a':'#94a3b8'}">
-              Bot: ${u.bot_status}
-            </span>
-          </div>
-        </div>
-        <div style="display:flex;gap:.4rem;flex-shrink:0">
-          ${!u.is_approved ? `
-            <button class="btn btn-sm btn-success" style="border-radius:7px;font-size:.75rem"
-              onclick="adminApprove(${u.tg_id},false)">تأیید</button>
-            <button class="btn btn-sm btn-primary" style="border-radius:7px;font-size:.75rem"
-              onclick="adminApprove(${u.tg_id},true)">تأیید + ادمین</button>
-          ` : `
-            <button class="btn btn-sm btn-outline-danger" style="border-radius:7px;font-size:.75rem"
-              onclick="adminRevoke(${u.tg_id})">لغو دسترسی</button>
-          `}
-        </div>
-      </div>`).join('');
-  } catch { body.innerHTML = '<p class="text-danger">خطای شبکه</p>'; }
-}
-
-async function adminApprove(uid, asAdmin) {
-  await fetch(`/api/admin/users/${uid}/approve`, {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({admin: asAdmin})
-  });
-  showToast('کاربر تأیید شد ✓', 'success');
-  await loadAdminUsers();
-}
-
-async function adminRevoke(uid) {
-  if (!confirm('دسترسی این کاربر لغو شود؟')) return;
-  await fetch(`/api/admin/users/${uid}/revoke`, {method:'POST'});
-  showToast('دسترسی لغو شد', 'warning');
-  await loadAdminUsers();
-}
-</script>
+<script src="/static/panel.js"></script>
 </body>
 </html>
