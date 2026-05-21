@@ -114,13 +114,28 @@ def _init_db():
             first_name  TEXT DEFAULT '',
             last_name   TEXT DEFAULT '',
             photo_url   TEXT DEFAULT '',
+            phone       TEXT DEFAULT '',
             is_approved INTEGER DEFAULT 0,
             is_admin    INTEGER DEFAULT 0,
             created_at  TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
+        cols = {r[1] for r in c.execute('PRAGMA table_info(users)').fetchall()}
+        if 'phone' not in cols:
+            c.execute('ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ""')
         c.commit()
 
 _init_db()
+
+def db_save_phone(tg_id: int, phone: str):
+    with _db() as c:
+        c.execute('UPDATE users SET phone=? WHERE tg_id=?', (phone.strip(), tg_id))
+        c.commit()
+
+def _mask_phone(phone: str) -> str:
+    p = phone.strip()
+    if len(p) < 6:
+        return '***'
+    return p[:3] + '***' + p[-4:]
 
 def db_get_user(tg_id: int) -> dict | None:
     with _db() as c:
@@ -376,6 +391,7 @@ _tg_loop     = asyncio.new_event_loop()
 _tg_clients:   dict[int, TelegramClient | None] = {}
 _tg_connected: dict[int, bool]                  = {}
 _tg_auth:      dict[int, dict]                  = {}
+_qr_state:     dict[int, dict]                  = {}
 
 threading.Thread(target=_tg_loop.run_forever, daemon=True, name='tg-loop').start()
 
@@ -633,6 +649,113 @@ def fwd_logs():
 # ══════════════════════════════════════════════════════════
 #  Routes — API: Auth (Telegram login from panel)
 # ══════════════════════════════════════════════════════════
+def _finish_telethon_login(uid: int):
+    initialize_user_config(uid)
+    reset_tg_client(uid)
+    auto_start_fwd(uid)
+
+def _qr_wait_thread(uid: int):
+    st = _qr_state.get(uid)
+    if not st:
+        return
+    try:
+        tg_run(st['qr'].wait(), timeout=120)
+        _tg_connected[uid] = True
+        _tg_auth.setdefault(uid, {})['phase'] = 'done'
+        st['done'] = True
+        _finish_telethon_login(uid)
+    except Exception as e:
+        st['error'] = str(e)
+
+@app.route('/api/auth/prepare', methods=['POST'])
+@login_required
+def auth_prepare():
+    """
+    آماده‌سازی اتصال Telethon پس از لاگین ویجت:
+    - اگر session هست → already
+    - اگر شماره ذخیره شده → ارسال خودکار کد (بدون تایپ شماره)
+    - وگرنه → QR با همان اکانت تلگرام (بدون شماره)
+    """
+    uid = cur_uid()
+    user = db_get_user(uid) or {}
+    if session_on_disk(uid):
+        try:
+            if tg_run(_telegram_ready_async(uid), timeout=25):
+                return jsonify({
+                    'ok': True, 'already': True,
+                    'first_name': user.get('first_name', ''),
+                })
+        except Exception:
+            pass
+
+    try:
+        c = tg_run(_client_connect(uid), timeout=20)
+    except Exception:
+        c = None
+    if not c:
+        return jsonify({'error': 'API سرور تنظیم نشده'}), 503
+
+    phone = (user.get('phone') or '').strip()
+    if phone:
+        try:
+            sent = tg_run(c.send_code_request(phone))
+            _tg_auth.setdefault(uid, {}).update(
+                phase='code_sent', phone=phone,
+                phone_code_hash=sent.phone_code_hash,
+            )
+            return jsonify({
+                'ok': True,
+                'step': 'code',
+                'masked_phone': _mask_phone(phone),
+                'first_name': user.get('first_name', ''),
+                'username': user.get('username', ''),
+                'auto_code': True,
+            })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    async def _start_qr():
+        if await c.is_user_authorized():
+            return {'already': True}
+        qr = await c.qr_login()
+        return qr
+
+    try:
+        qr = tg_run(_start_qr(), timeout=30)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if isinstance(qr, dict) and qr.get('already'):
+        _tg_connected[uid] = True
+        _finish_telethon_login(uid)
+        return jsonify({'ok': True, 'already': True})
+
+    _qr_state[uid] = {'qr': qr, 'done': False, 'error': None}
+    threading.Thread(target=_qr_wait_thread, args=(uid,), daemon=True).start()
+    return jsonify({
+        'ok': True,
+        'step': 'qr',
+        'qr_url': qr.url,
+        'first_name': user.get('first_name', ''),
+        'username': user.get('username', ''),
+    })
+
+@app.route('/api/auth/qr_status')
+@login_required
+def auth_qr_status():
+    uid = cur_uid()
+    st = _qr_state.get(uid)
+    if not st:
+        return jsonify({'pending': True})
+    if st.get('error'):
+        err = st['error']
+        _qr_state.pop(uid, None)
+        return jsonify({'error': str(err)}), 400
+    if st.get('done'):
+        _qr_state.pop(uid, None)
+        return jsonify({'ok': True, 'done': True})
+    return jsonify({'pending': True})
+
 @app.route('/api/auth/send_code', methods=['POST'])
 @login_required
 def auth_send_code():
@@ -650,6 +773,7 @@ def auth_send_code():
         sent = tg_run(c.send_code_request(phone))
         _tg_auth[uid].update(phase='code_sent', phone=phone,
                              phone_code_hash=sent.phone_code_hash)
+        db_save_phone(uid, phone)
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -668,9 +792,8 @@ def auth_verify_code():
                          phone_code_hash=_tg_auth[uid]['phone_code_hash']))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
-        initialize_user_config(uid)
-        reset_tg_client(uid)
-        auto_start_fwd(uid)
+        db_save_phone(uid, _tg_auth[uid].get('phone', ''))
+        _finish_telethon_login(uid)
         return jsonify({'ok': True})
     except PhoneCodeInvalidError:
         return jsonify({'error': 'کد اشتباه است'}), 400
@@ -692,9 +815,7 @@ def auth_verify_2fa():
         tg_run(c.sign_in(password=pw))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
-        initialize_user_config(uid)
-        reset_tg_client(uid)
-        auto_start_fwd(uid)
+        _finish_telethon_login(uid)
         return jsonify({'ok': True})
     except PasswordHashInvalidError:
         return jsonify({'error': 'رمز اشتباه است'}), 400

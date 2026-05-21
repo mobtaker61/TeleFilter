@@ -7,6 +7,7 @@ let tgOk = false, forumOk = false, botStatus = 'stopped', hasSession = false;
 let needsApi = false, needsTelethon = false;
 let isAdmin = window.TF_IS_ADMIN === true || window.TF_IS_ADMIN === 'true';
 let loginMdl, settingsMdl, createMdl, setupMdl, adminMdl, linkGroupMdl, createGroupMdl;
+let qrPollTimer = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   loginMdl = new bootstrap.Modal(document.getElementById('loginModal'));
@@ -116,14 +117,125 @@ function updateConnBadge() {
   }
 }
 
-function openTelethonSetup(auto) {
-  const sub = document.getElementById('loginSubtitle');
-  if (sub) {
-    sub.textContent = auto
-      ? 'برای فوروارد پیام‌ها، یک‌بار کد تأیید تلگرام را وارد کنید (همان اکانتی که با آن وارد پنل شدید).'
-      : 'کد تأیید تلگرام را وارد کنید.';
+async function openTelethonSetup(auto) {
+  stopQrPoll();
+  loginMdl.show();
+  showLoginView('loading');
+  hideLoginErrors();
+  try {
+    const d = await (await fetch('/api/auth/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })).json();
+    if (d.already) {
+      loginMdl.hide();
+      await onLoginSuccess();
+      return;
+    }
+    if (!d.ok) {
+      showToast(d.error || 'خطا در اتصال', 'danger');
+      showLoginView('phone');
+      setLoginBtn('ارسال کد', doSendCode);
+      return;
+    }
+    if (d.step === 'code') {
+      const name = d.first_name || 'کاربر';
+      const hint = d.masked_phone ? ` (${d.masked_phone})` : '';
+      document.getElementById('loginSubtitle2').textContent =
+        d.auto_code
+          ? `${name}، کد به تلگرام شما ارسال شد${hint} — همان اکانتی که با آن وارد شدی.`
+          : 'کد ۵ رقمی را وارد کن';
+      showLoginView('code');
+      setLoginBtn('تأیید کد', doVerifyCode);
+      document.getElementById('loginBtn').disabled = false;
+      setTimeout(() => document.getElementById('loginCode').focus(), 200);
+      return;
+    }
+    if (d.step === 'qr') {
+      const name = d.first_name || 'کاربر';
+      document.getElementById('qrHint').textContent =
+        `${name}، در اپ تلگرام همان اکانت را تأیید کن (بدون وارد کردن شماره)`;
+      showLoginView('qr', d.qr_url);
+      startQrPoll();
+      return;
+    }
+    showLoginView('phone');
+    setLoginBtn('ارسال کد', doSendCode);
+  } catch {
+    showToast('خطای شبکه', 'danger');
+    showLoginView('phone');
+    setLoginBtn('ارسال کد', doSendCode);
   }
-  openLogin();
+}
+
+function stopQrPoll() {
+  if (qrPollTimer) {
+    clearInterval(qrPollTimer);
+    qrPollTimer = null;
+  }
+}
+
+function startQrPoll() {
+  stopQrPoll();
+  qrPollTimer = setInterval(async () => {
+    try {
+      const d = await (await fetch('/api/auth/qr_status')).json();
+      if (d.ok && d.done) {
+        stopQrPoll();
+        loginMdl.hide();
+        await onLoginSuccess();
+      } else if (d.error) {
+        stopQrPoll();
+        showToast(d.error, 'danger');
+        showPhoneLoginFallback();
+      }
+    } catch { /* retry */ }
+  }, 2000);
+}
+
+function showPhoneLoginFallback() {
+  stopQrPoll();
+  showLoginView('phone');
+  setLoginBtn('ارسال کد', doSendCode);
+  document.getElementById('loginBtn').disabled = false;
+  setTimeout(() => document.getElementById('loginPhone').focus(), 200);
+}
+
+function showLoginView(mode, qrUrl) {
+  ['loginLoading', 'lstepQr', 'lstep1', 'lstep2', 'lstep3'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('active');
+  });
+  const ind = document.getElementById('loginStepIndicator');
+  const btn = document.getElementById('loginBtn');
+  if (mode === 'loading') {
+    document.getElementById('loginLoading').classList.add('active');
+    if (ind) ind.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+  } else if (mode === 'qr') {
+    document.getElementById('lstepQr').classList.add('active');
+    document.getElementById('qrImage').src =
+      'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(qrUrl || '');
+    if (ind) ind.style.display = 'none';
+    if (btn) btn.style.display = 'none';
+  } else if (mode === 'code') {
+    document.getElementById('lstep2').classList.add('active');
+    if (ind) {
+      ind.style.display = 'flex';
+      ind.classList.add('compact');
+    }
+    showLoginStep(2);
+    if (btn) btn.style.display = '';
+  } else if (mode === 'phone') {
+    document.getElementById('lstep1').classList.add('active');
+    if (ind) {
+      ind.style.display = 'flex';
+      ind.classList.remove('compact');
+    }
+    showLoginStep(1);
+    if (btn) btn.style.display = '';
+  }
 }
 
 function onBadgeClick() {
@@ -400,24 +512,24 @@ async function doCreateGroup() {
 }
 
 // ── Login ───────────────────────────────────────────────
-function openLogin() {
-  showLoginStep(1);
-  ['loginPhone', 'loginCode', 'login2fa'].forEach(id => document.getElementById(id).value = '');
-  hideLoginErrors();
-  setLoginBtn('ارسال کد', doSendCode);
-  loginMdl.show();
-  setTimeout(() => document.getElementById('loginPhone').focus(), 300);
-}
-
 function showLoginStep(n) {
+  const compact = document.getElementById('loginStepIndicator')?.classList.contains('compact');
+  const map = compact ? { 2: 1, 3: 2 } : { 1: 1, 2: 2, 3: 3 };
+  const visual = map[n] || n;
   [1, 2, 3].forEach(i => {
-    document.getElementById(`lstep${i}`).classList.toggle('active', i === n);
     const d = document.getElementById(`sd${i}`);
-    d.classList.toggle('active', i === n);
-    d.classList.toggle('done', i < n);
+    if (!d) return;
+    if (compact && i === 3) {
+      d.style.display = 'none';
+      return;
+    }
+    d.style.display = '';
+    d.classList.toggle('active', i === visual);
+    d.classList.toggle('done', i < visual);
   });
-  document.getElementById('sl1').classList.toggle('done', n > 1);
-  document.getElementById('sl2').classList.toggle('done', n > 2);
+  const sl2 = document.getElementById('sl2');
+  if (sl2) sl2.classList.toggle('done', visual > 1);
+  document.getElementById('sl1')?.classList.toggle('done', visual > 1);
 }
 
 function setLoginBtn(label, fn) {
@@ -453,7 +565,7 @@ async function doSendCode() {
       body: JSON.stringify({ phone }),
     })).json();
     if (d.ok) {
-      showLoginStep(2);
+      showLoginView('code');
       setLoginBtn('تأیید کد', doVerifyCode);
       document.getElementById('loginBtn').disabled = false;
       setTimeout(() => document.getElementById('loginCode').focus(), 100);
@@ -481,8 +593,12 @@ async function doVerifyCode() {
     })).json();
     if (d.ok) await onLoginSuccess();
     else if (d.need_2fa) {
+      document.getElementById('lstep3').classList.add('active');
+      document.getElementById('loginStepIndicator').style.display = 'flex';
+      document.getElementById('loginStepIndicator').classList.remove('compact');
       showLoginStep(3);
       setLoginBtn('تأیید رمز', doVerify2FA);
+      document.getElementById('loginBtn').style.display = '';
       document.getElementById('loginBtn').disabled = false;
     } else {
       showLoginError(2, d.error || 'خطا');
@@ -520,6 +636,7 @@ async function doVerify2FA() {
 }
 
 async function onLoginSuccess() {
+  stopQrPoll();
   loginMdl.hide();
   showToast('اتصال برقرار شد — فوروارد خودکار فعال می‌شود ✓', 'success');
   needsTelethon = false;
