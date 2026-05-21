@@ -31,19 +31,25 @@ from config_util import (
 
 try:
     from telethon.tl.functions.messages import GetForumTopicsRequest, CreateForumTopicRequest
-    from telethon.tl.functions.channels import CreateChannelRequest
+    from telethon.tl.functions.channels import CreateChannelRequest, GetFullChannelRequest
+    from telethon.tl.types import InputChannel
     HAS_FORUM_API = True
     HAS_CREATE_CHANNEL = True
+    HAS_FULL_CHANNEL = True
 except ImportError:
     try:
         from telethon.tl.functions.channels import (
             GetForumTopicsRequest, CreateForumTopicRequest, CreateChannelRequest,
+            GetFullChannelRequest,
         )
+        from telethon.tl.types import InputChannel
         HAS_FORUM_API = True
         HAS_CREATE_CHANNEL = True
+        HAS_FULL_CHANNEL = True
     except ImportError:
         HAS_FORUM_API = False
         HAS_CREATE_CHANNEL = False
+        HAS_FULL_CHANNEL = False
 
 # ══════════════════════════════════════════════════════════
 #  Paths
@@ -185,20 +191,30 @@ def session_on_disk(uid: int) -> bool:
     _migrate_panel_session(uid)
     return os.path.exists(_session_file(uid))
 
+def _apply_master_api(cfg: dict) -> dict:
+    m = load_master()
+    cfg['api_id']   = str(m.get('api_id',   cfg.get('api_id', '')))
+    cfg['api_hash'] = str(m.get('api_hash', cfg.get('api_hash', '')))
+    return cfg
+
 def load_user_config(tg_id: int) -> dict:
     try:
         with open(user_config_path(tg_id), 'r', encoding='utf-8') as f:
-            return normalize_config(json.load(f))
+            cfg = normalize_config(json.load(f))
     except Exception:
-        return empty_config()
+        cfg = empty_config()
+    return _apply_master_api(cfg)
 
 def save_user_config(tg_id: int, data: dict):
-    cfg = normalize_config(data)
-    m = load_master()
-    cfg['api_id'] = str(m.get('api_id', ''))
-    cfg['api_hash'] = str(m.get('api_hash', ''))
+    cfg = _apply_master_api(normalize_config(data))
     with open(user_config_path(tg_id), 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+def initialize_user_config(tg_id: int) -> dict:
+    user_dir(tg_id)
+    cfg = load_user_config(tg_id)
+    save_user_config(tg_id, cfg)
+    return cfg
 
 def user_api_credentials(uid: int) -> tuple[str, str]:
     m = load_master()
@@ -382,17 +398,44 @@ def _make_client(uid: int) -> TelegramClient | None:
         _tg_auth[uid] = {'phase': 'idle', 'phone': None, 'phone_code_hash': None}
     return client
 
+async def _client_connect(uid: int) -> TelegramClient | None:
+    if not master_api_ready():
+        return None
+    if uid not in _tg_clients:
+        _make_client(uid)
+    c = _tg_clients.get(uid)
+    if not c:
+        return None
+    if not c.is_connected():
+        await c.connect()
+    return c
+
 async def _connect(uid: int):
     c = _tg_clients.get(uid)
-    if not c: return
+    if not c:
+        return
     try:
-        await c.connect()
+        if not c.is_connected():
+            await c.connect()
         ok = await c.is_user_authorized()
         _tg_connected[uid] = ok
-        if ok: _tg_auth[uid]['phase'] = 'done'
+        if ok:
+            _tg_auth[uid]['phase'] = 'done'
     except Exception as e:
         _tg_connected[uid] = False
         print(f'[TG:{uid}] {e}')
+
+async def _telegram_ready_async(uid: int) -> bool:
+    if not master_api_ready() or not session_on_disk(uid):
+        _tg_connected[uid] = False
+        return False
+    if uid not in _tg_clients:
+        _make_client(uid)
+    c = _tg_clients.get(uid)
+    if not c:
+        return False
+    await _connect(uid)
+    return _tg_connected.get(uid, False)
 
 def reset_tg_client(uid: int) -> TelegramClient | None:
     old = _tg_clients.pop(uid, None)
@@ -405,15 +448,20 @@ def reset_tg_client(uid: int) -> TelegramClient | None:
     return ensure_client(uid)
 
 def ensure_client(uid: int) -> TelegramClient | None:
-    if uid not in _tg_clients:
-        c = _make_client(uid)
-        if c:
-            try: tg_run(_connect(uid), timeout=15)
-            except Exception: pass
-    return _tg_clients.get(uid)
+    if not master_api_ready() or not session_on_disk(uid):
+        return None
+    try:
+        if tg_run(_telegram_ready_async(uid), timeout=25):
+            return _tg_clients.get(uid)
+    except Exception as e:
+        print(f'[TG:{uid}] ensure_client: {e}')
+    return None
 
 def tg_ok(uid: int) -> bool:
-    return _tg_connected.get(uid, False)
+    try:
+        return tg_run(_telegram_ready_async(uid), timeout=25)
+    except Exception:
+        return False
 
 # ══════════════════════════════════════════════════════════
 #  Routes — Setup (اولین اجرا)
@@ -478,14 +526,14 @@ def auth_telegram():
 
     # اگر کاربر approved است، client را lazy init کن
     if user['is_approved']:
+        initialize_user_config(uid)
         ensure_client(uid)
         auto_start_fwd(uid)
 
-    cfg = load_user_config(uid)
     return jsonify({
         'ok': True,
         'approved': bool(user['is_approved']),
-        'needs_api': not (cfg.get('api_id') and cfg.get('api_hash')),
+        'needs_api': not master_api_ready(),
         'needs_telethon': needs_telethon_login(uid),
     })
 
@@ -506,6 +554,7 @@ def index():
     if not user or not user['is_approved']:
         return render_template('pending.html', user=user)
     uid = cur_uid()
+    initialize_user_config(uid)
     ensure_client(uid)
     auto_start_fwd(uid)
     return render_template('index.html', user=user, master_api=master_api_ready())
@@ -537,6 +586,7 @@ def get_status():
     user = db_get_user(uid)
     return jsonify({
         'connected':        tg_ok(uid),
+        'panel_ready':      tg_ok(uid),
         'has_client':       _tg_clients.get(uid) is not None,
         'has_forum_api':    HAS_FORUM_API,
         'auth_phase':       _tg_auth.get(uid, {}).get('phase', 'idle'),
@@ -587,9 +637,12 @@ def fwd_logs():
 @login_required
 def auth_send_code():
     uid = cur_uid()
-    c   = ensure_client(uid)
+    try:
+        c = tg_run(_client_connect(uid), timeout=15)
+    except Exception:
+        c = None
     if not c:
-        return jsonify({'error': 'سرور هنوز آماده نشده'}), 503
+        return jsonify({'error': 'API سرور تنظیم نشده یا اتصال برقرار نشد'}), 503
     phone = (request.get_json() or {}).get('phone', '').strip()
     if not phone:
         return jsonify({'error': 'شماره تلفن وارد نشده'}), 400
@@ -606,6 +659,8 @@ def auth_send_code():
 def auth_verify_code():
     uid  = cur_uid()
     c    = _tg_clients.get(uid)
+    if not c:
+        return jsonify({'error': 'ابتدا کد را درخواست کن'}), 400
     code = (request.get_json() or {}).get('code', '').strip()
     if not code: return jsonify({'error': 'کد وارد نشده'}), 400
     try:
@@ -613,6 +668,7 @@ def auth_verify_code():
                          phone_code_hash=_tg_auth[uid]['phone_code_hash']))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
+        initialize_user_config(uid)
         reset_tg_client(uid)
         auto_start_fwd(uid)
         return jsonify({'ok': True})
@@ -629,11 +685,14 @@ def auth_verify_code():
 def auth_verify_2fa():
     uid = cur_uid()
     c   = _tg_clients.get(uid)
+    if not c:
+        return jsonify({'error': 'ابتدا کد را درخواست کن'}), 400
     pw  = (request.get_json() or {}).get('password', '')
     try:
         tg_run(c.sign_in(password=pw))
         _tg_connected[uid] = True
         _tg_auth[uid]['phase'] = 'done'
+        initialize_user_config(uid)
         reset_tg_client(uid)
         auto_start_fwd(uid)
         return jsonify({'ok': True})
@@ -675,18 +734,76 @@ def api_dashboard_stats():
     return jsonify(stats)
 
 
+@app.route('/api/groups/<group_id>/info')
+@login_required
+def group_telegram_info(group_id: str):
+    uid = cur_uid()
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا با شماره تلفن وارد تلگرام شو'}), 503
+    cfg = load_user_config(uid)
+    tg_gid = _group_telegram_id(cfg, group_id)
+    if tg_gid is None:
+        return jsonify({'error': 'no_group'}), 400
+    g = find_group(cfg, group_id)
+
+    async def _fetch():
+        entity = await c.get_entity(tg_gid)
+        about = ''
+        members_count = getattr(entity, 'participants_count', None)
+        if HAS_FULL_CHANNEL and hasattr(entity, 'id'):
+            try:
+                inp = InputChannel(entity.id, entity.access_hash)
+                full = await c(GetFullChannelRequest(channel=inp))
+                about = getattr(full.full_chat, 'about', None) or ''
+                members_count = getattr(full.full_chat, 'participants_count', members_count)
+            except Exception:
+                pass
+        participants = []
+        try:
+            async for p in c.iter_participants(entity, limit=40):
+                name = ' '.join(filter(None, [
+                    getattr(p, 'first_name', '') or '',
+                    getattr(p, 'last_name', '') or '',
+                ])).strip() or getattr(p, 'username', '') or str(p.id)
+                participants.append({
+                    'id': p.id,
+                    'name': name,
+                    'username': getattr(p, 'username', '') or '',
+                    'is_bot': bool(getattr(p, 'bot', False)),
+                })
+        except Exception:
+            pass
+        return {
+            'title': getattr(entity, 'title', None) or (g.get('title') if g else ''),
+            'about': about,
+            'members_count': members_count,
+            'telegram_id': str(tg_gid),
+            'is_forum': bool(getattr(entity, 'forum', False)),
+            'username': getattr(entity, 'username', '') or '',
+            'participants': participants,
+        }
+
+    try:
+        info = tg_run(_fetch(), timeout=45)
+        return jsonify({'ok': True, **info})
+    except Exception as e:
+        return jsonify({'error': 'api', 'msg': str(e)}), 500
+
+
 @app.route('/api/telegram/dialogs')
 @login_required
 def list_tg_dialogs():
     uid = cur_uid()
-    if not tg_ok(uid):
-        return jsonify({'error': 'not_connected', 'msg': 'ابتدا اتصال تلگرام را تکمیل کن'}), 503
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا با شماره تلفن وارد تلگرام شو'}), 503
     cfg = load_user_config(uid)
     linked = {str(g.get('telegram_id')) for g in cfg.get('groups') or []}
 
     async def _fetch():
         items = []
-        async for d in _tg_clients[uid].iter_dialogs(limit=200):
+        async for d in c.iter_dialogs(limit=200):
             ent = d.entity
             if not isinstance(ent, Channel):
                 continue
@@ -739,7 +856,8 @@ def link_group():
 @login_required
 def create_group():
     uid = cur_uid()
-    if not tg_ok(uid):
+    c = ensure_client(uid)
+    if not c:
         return jsonify({'error': 'not_connected'}), 503
     if not HAS_CREATE_CHANNEL:
         return jsonify({'error': 'no_api', 'msg': 'telethon upgrade required'}), 501
@@ -748,7 +866,7 @@ def create_group():
         return jsonify({'error': 'no_title'}), 400
 
     async def _create():
-        return await _tg_clients[uid](CreateChannelRequest(
+        return await c(CreateChannelRequest(
             title=title,
             about='TeleFilter',
             megagroup=True,
@@ -793,8 +911,9 @@ def delete_group(group_id: str):
 @login_required
 def get_tg_topics():
     uid = cur_uid()
-    if not tg_ok(uid):
-        return jsonify({'error': 'not_connected', 'msg': 'ابتدا اتصال تلگرام را تکمیل کن'}), 503
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا با شماره تلفن وارد تلگرام شو'}), 503
     if not HAS_FORUM_API:
         return jsonify({'error': 'no_api', 'msg': 'pip install --upgrade telethon'}), 501
     group_id = request.args.get('group_id', '').strip()
@@ -805,7 +924,7 @@ def get_tg_topics():
     if tg_gid is None:
         return jsonify({'error': 'no_group', 'msg': 'ابتدا یک گروه اضافه کن'}), 400
     try:
-        result = tg_run(_tg_clients[uid](GetForumTopicsRequest(
+        result = tg_run(c(GetForumTopicsRequest(
             peer=tg_gid, offset_date=None, offset_id=0, offset_topic=0, limit=100, q=None
         )))
         return jsonify({'topics': [{'id': t.id, 'title': t.title} for t in result.topics]})
@@ -816,8 +935,9 @@ def get_tg_topics():
 @login_required
 def create_tg_topic():
     uid = cur_uid()
-    if not tg_ok(uid):
-        return jsonify({'error': 'not_connected', 'msg': 'ابتدا اتصال تلگرام را تکمیل کن'}), 503
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'error': 'not_connected', 'msg': 'ابتدا با شماره تلفن وارد تلگرام شو'}), 503
     if not HAS_FORUM_API:
         return jsonify({'error': 'no_api', 'msg': 'pip install --upgrade telethon'}), 501
     data  = request.get_json() or {}
@@ -830,7 +950,7 @@ def create_tg_topic():
     if tg_gid is None:
         return jsonify({'error': 'no_group', 'msg': 'گروه انتخاب نشده'}), 400
     try:
-        result = tg_run(_tg_clients[uid](CreateForumTopicRequest(
+        result = tg_run(c(CreateForumTopicRequest(
             peer=tg_gid, title=title, random_id=random.randint(1, 2**31)
         )))
         topic_id = None
@@ -864,6 +984,7 @@ def admin_list_users():
 def admin_approve(uid: int):
     is_admin = (request.get_json() or {}).get('admin', False)
     db_set_approval(uid, approved=True, admin=is_admin)
+    initialize_user_config(uid)
     ensure_client(uid)
     auto_start_fwd(uid)
     return jsonify({'ok': True})

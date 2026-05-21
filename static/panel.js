@@ -89,10 +89,16 @@ function updateConnBadge() {
     b.innerHTML = '<i class="bi bi-circle-fill dot"></i> فوروارد فعال';
     b.onclick = null;
     b.style.cursor = 'default';
+  } else if (hasSession && !tgOk) {
+    b.className = 'tbadge warn';
+    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> تکمیل اتصال';
+    b.onclick = () => openTelethonSetup(false);
+    b.style.cursor = 'pointer';
   } else if (hasSession) {
     b.className = 'tbadge warn';
     b.innerHTML = '<i class="bi bi-circle-fill dot"></i> در حال راه‌اندازی…';
     b.onclick = null;
+    b.style.cursor = 'default';
   } else if (needsTelethon) {
     b.className = 'tbadge warn';
     b.innerHTML = '<i class="bi bi-circle-fill dot"></i> تکمیل اتصال';
@@ -179,8 +185,21 @@ async function loadGroupDashboard(gid) {
   if (!g) return;
   el.innerHTML = '<div class="text-muted py-3"><i class="bi bi-hourglass-split spin"></i></div>';
   try {
-    const s = await (await fetch(`/api/dashboard/stats?group_id=${encodeURIComponent(gid)}`)).json();
+    const [statsRes, infoRes] = await Promise.all([
+      fetch(`/api/dashboard/stats?group_id=${encodeURIComponent(gid)}`),
+      fetch(`/api/groups/${encodeURIComponent(gid)}/info`),
+    ]);
+    const s = await statsRes.json();
+    const info = await infoRes.json();
     const topics = tgTopicsByGroup[gid] || [];
+    const title = (info.ok && info.title) ? info.title : g.title;
+    const about = (info.ok && info.about) ? info.about : '';
+    const membersCount = info.members_count != null ? info.members_count : '—';
+    const membersHtml = (info.participants || []).map(p => `
+      <div class="member-row">
+        <span>${esc(p.name)}${p.username ? ` <span class="text-muted">@${esc(p.username)}</span>` : ''}</span>
+        ${p.is_bot ? '<span class="badge bg-secondary">bot</span>' : ''}
+      </div>`).join('') || '<p class="text-muted small mb-0">لیست اعضا در دسترس نیست (دسترسی ادمین گروه لازم است).</p>';
     const topicMini = (s.topic_list || []).map(t => {
       const tg = topics.find(x => x.id === t.topic_id);
       const name = tg?.title || t.name || `Topic ${t.topic_id}`;
@@ -192,9 +211,11 @@ async function loadGroupDashboard(gid) {
       <div class="group-profile-hdr">
         <div class="group-profile-icon"><i class="bi bi-people-fill"></i></div>
         <div style="flex:1">
-          <h5 class="mb-1" style="font-weight:700">${esc(g.title)}</h5>
+          <h5 class="mb-1" style="font-weight:700">${esc(title)}</h5>
           <div class="text-muted" style="font-size:.8rem">ID: <span dir="ltr">${esc(g.telegram_id)}</span>
-            · ${g.origin === 'created' ? 'ساخته‌شده در TeleFilter' : 'متصل از تلگرام'}</div>
+            · ${membersCount} عضو
+            · ${g.origin === 'created' ? 'ساخته‌شده' : 'متصل'}</div>
+          ${about ? `<p class="mt-2 mb-0" style="font-size:.85rem;color:#475569;line-height:1.7">${esc(about)}</p>` : ''}
         </div>
         <button class="btn btn-sm btn-outline-secondary" onclick="goHome()"><i class="bi bi-grid me-1"></i>داشبورد کل</button>
       </div>
@@ -209,6 +230,11 @@ async function loadGroupDashboard(gid) {
       <div class="dash-chart-box mb-3">
         <div class="dash-chart-title"><i class="bi bi-bar-chart-fill"></i> فوروارد این گروه — ۷ روز</div>
         <div class="dash-chart">${chartHtml(s.chart)}</div>
+      </div>
+      <div class="members-box mb-3">
+        <h6 style="font-size:.85rem;font-weight:600;color:#334155"><i class="bi bi-person-lines-fill me-1"></i>اعضا (نمونه)</h6>
+        <div class="members-list">${membersHtml}</div>
+        <p class="text-muted mt-2 mb-0" style="font-size:.72rem">مدیریت افزودن/حذف عضو — به‌زودی</p>
       </div>
       <div class="topic-mini-list">
         <h6 style="font-size:.85rem;font-weight:600;color:#334155"><i class="bi bi-hash me-1"></i>Topics و سورس‌ها</h6>
@@ -306,7 +332,7 @@ async function syncAllTopics() {
 
 // ── Groups ──────────────────────────────────────────────
 function openLinkGroup() {
-  if (needsTelethon) { openTelethonSetup(false); return; }
+  if (needsTelethon || (hasSession && !tgOk)) { openTelethonSetup(false); return; }
   document.getElementById('linkGroupList').innerHTML = '<div class="text-muted py-2">در حال بارگذاری…</div>';
   linkGroupMdl.show();
   loadLinkCandidates();
@@ -498,8 +524,8 @@ async function onLoginSuccess() {
   showToast('اتصال برقرار شد — فوروارد خودکار فعال می‌شود ✓', 'success');
   needsTelethon = false;
   hasSession = true;
+  await loadConfigFromServer();
   await refreshStatus();
-  ensure_client_refresh();
   await bootMain();
 }
 
@@ -774,11 +800,13 @@ async function adminRevoke(uid) {
 
 async function bootMain() {
   await refreshStatus();
+  renderTree();
   await loadDashboard();
   markClean();
   if (!needsTelethon && groups.length) {
     if (groups.length === 1) expandedGroups.add(groups[0].id);
     await syncAllTopics();
+    renderTree();
   }
   setInterval(async () => {
     await refreshStatus();
