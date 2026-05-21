@@ -321,7 +321,7 @@
     .member-row:last-child { border-bottom: none; }
   </style>
 </head>
-<body>
+<body data-tf-is-admin="{{ ((user and user.is_admin) or false)|tojson }}">
 
 <!-- ══ TOPBAR ════════════════════════════════════════════ -->
 <div class="topbar">
@@ -659,13 +659,18 @@
   <div class="modal-dialog modal-dialog-centered modal-sm">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-people-fill me-2"></i>گروه Forum جدید</h5>
+        <h5 class="modal-title"><i class="bi bi-people-fill me-2"></i>گروه جدید در تلگرام</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <label class="form-label">نام گروه</label>
         <input type="text" class="form-control" id="newGroupTitle" placeholder="مثال: فیلتر قیمت"
           onkeydown="if(event.key==='Enter') doCreateGroup()">
+        <div class="form-check mt-3">
+          <input class="form-check-input" type="checkbox" id="newGroupForum" checked>
+          <label class="form-check-label" for="newGroupForum">گروه Forum با Topics</label>
+        </div>
+        <p class="form-text mb-0">اگر تیک را بردارید، گروه معمولی (بدون Topic) ساخته می‌شود.</p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">انصراف</button>
@@ -695,7 +700,7 @@
   <div class="toast-box" id="toastBox"></div>
 </div>
 
-<script>window.TF_IS_ADMIN = {{ 'true' if user and user.is_admin else 'false' }};</script>
+<script>window.TF_IS_ADMIN = document.body.dataset.tfIsAdmin === 'true';</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script src="/static/panel.js"></script>
 </body>

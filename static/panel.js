@@ -49,6 +49,10 @@ function buildCfgMapFromGroups(grps) {
 
 function cfgKey(gid, tid) { return `${gid}:${tid}`; }
 
+function groupIsForum(g) {
+  return g && g.is_forum !== false;
+}
+
 function ensureCfg() {
   const k = cfgKey(selGroupId, selTopicId);
   if (!cfgMap[k]) cfgMap[k] = { sources: [] };
@@ -79,15 +83,17 @@ async function refreshStatus() {
     needsApi = !!s.needs_api;
     needsTelethon = !!s.needs_telethon;
     if (s.is_admin !== undefined) isAdmin = !!s.is_admin;
+    window._sourcesConfigured = s.sources_configured ?? 0;
     updateConnBadge();
   } catch { /* silent */ }
 }
 
 function updateConnBadge() {
   const b = document.getElementById('connBadge');
-  if (hasSession && botStatus === 'running') {
+    if (hasSession && botStatus === 'running') {
     b.className = 'tbadge ok';
-    b.innerHTML = '<i class="bi bi-circle-fill dot"></i> فوروارد فعال';
+    const srcHint = (window._sourcesConfigured === 0) ? ' — سورسی ذخیره نشده' : '';
+    b.innerHTML = `<i class="bi bi-circle-fill dot"></i> فوروارد فعال${srcHint}`;
     b.onclick = null;
     b.style.cursor = 'default';
   } else if (hasSession && !tgOk) {
@@ -308,10 +314,14 @@ async function loadGroupDashboard(gid) {
     const about = (info.ok && info.about) ? info.about : '';
     const membersCount = info.members_count != null ? info.members_count : '—';
     const membersHtml = (info.participants || []).map(p => `
-      <div class="member-row">
+      <div class="member-row d-flex justify-content-between align-items-center gap-2">
         <span>${esc(p.name)}${p.username ? ` <span class="text-muted">@${esc(p.username)}</span>` : ''}</span>
-        ${p.is_bot ? '<span class="badge bg-secondary">bot</span>' : ''}
-      </div>`).join('') || '<p class="text-muted small mb-0">لیست اعضا در دسترس نیست (دسترسی ادمین گروه لازم است).</p>';
+        <span class="d-flex align-items-center gap-1">
+          ${p.is_bot ? '<span class="badge bg-secondary">bot</span>' : ''}
+          ${!p.is_bot ? `<button type="button" class="btn btn-sm btn-outline-danger py-0 px-1" title="حذف از گروه"
+            onclick="removeGroupMember('${gid}',${p.id})"><i class="bi bi-person-x"></i></button>` : ''}
+        </span>
+      </div>`).join('') || '<p class="text-muted small mb-0">لیست اعضا در دسترس نیست — اکانت شما باید ادمین گروه باشد.</p>';
     const topicMini = (s.topic_list || []).map(t => {
       const tg = topics.find(x => x.id === t.topic_id);
       const name = tg?.title || t.name || `Topic ${t.topic_id}`;
@@ -329,7 +339,14 @@ async function loadGroupDashboard(gid) {
             · ${g.origin === 'created' ? 'ساخته‌شده' : 'متصل'}</div>
           ${about ? `<p class="mt-2 mb-0" style="font-size:.85rem;color:#475569;line-height:1.7">${esc(about)}</p>` : ''}
         </div>
-        <button class="btn btn-sm btn-outline-secondary" onclick="goHome()"><i class="bi bi-grid me-1"></i>داشبورد کل</button>
+        <div class="d-flex flex-column gap-1">
+          <button class="btn btn-sm btn-outline-secondary" onclick="goHome()"><i class="bi bi-grid me-1"></i>داشبورد کل</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteGroupFromList('${gid}')"><i class="bi bi-trash me-1"></i>حذف از لیست</button>
+        </div>
+      </div>
+      <div class="alert alert-light border mb-3 py-2" style="font-size:.78rem">
+        <i class="bi bi-info-circle me-1"></i>
+        فوروارد با <strong>اکانت شخصی</strong> شما انجام می‌شود (نه ربات). باید عضو گروه مقصد باشید و پس از تنظیم سورس‌ها <strong>ذخیره تغییرات</strong> بزنید.
       </div>
       <div class="dash-grid">
         <div class="dash-card"><div class="dash-num">${s.topics || 0}</div><div class="dash-lbl">Topic</div></div>
@@ -344,9 +361,13 @@ async function loadGroupDashboard(gid) {
         <div class="dash-chart">${chartHtml(s.chart)}</div>
       </div>
       <div class="members-box mb-3">
-        <h6 style="font-size:.85rem;font-weight:600;color:#334155"><i class="bi bi-person-lines-fill me-1"></i>اعضا (نمونه)</h6>
+        <h6 style="font-size:.85rem;font-weight:600;color:#334155"><i class="bi bi-person-lines-fill me-1"></i>اعضا</h6>
+        <div class="d-flex gap-2 mb-2">
+          <input type="text" class="form-control form-control-sm" id="inviteMemberInput" dir="ltr"
+            placeholder="@username یا شناسه عددی">
+          <button type="button" class="btn btn-sm btn-primary" onclick="inviteGroupMember('${gid}')">افزودن</button>
+        </div>
         <div class="members-list">${membersHtml}</div>
-        <p class="text-muted mt-2 mb-0" style="font-size:.72rem">مدیریت افزودن/حذف عضو — به‌زودی</p>
       </div>
       <div class="topic-mini-list">
         <h6 style="font-size:.85rem;font-weight:600;color:#334155"><i class="bi bi-hash me-1"></i>Topics و سورس‌ها</h6>
@@ -384,9 +405,10 @@ function renderTree() {
     return;
   }
   el.innerHTML = groups.map(g => {
-    const topics = tgTopicsByGroup[g.id] || [];
+    const topics = tgTopicsByGroup[g.id] || (groupIsForum(g) ? [] : [{ id: 0, title: 'چت اصلی' }]);
     const isOpen = expandedGroups.has(g.id);
     const gActive = selGroupId === g.id && !selTopicId;
+    const forum = groupIsForum(g);
     const topicRows = topics.map(t => {
       const cnt = (cfgMap[cfgKey(g.id, t.id)] || {}).sources?.length || 0;
       const active = selGroupId === g.id && selTopicId === t.id;
@@ -400,10 +422,10 @@ function renderTree() {
           <i class="bi bi-chevron-left"></i></button>
         <button type="button" class="group-title-btn" onclick="selectGroup('${g.id}')">
           <div class="t-name">${esc(g.title)}</div>
-          <div class="t-meta">${topics.length} topic · ${g.origin === 'created' ? 'ساخته‌شده' : 'متصل'}</div>
+          <div class="t-meta">${forum ? topics.length + ' topic' : 'گروه/کانال عادی'} · ${g.origin === 'created' ? 'ساخته‌شده' : 'متصل'}</div>
         </button>
         <div class="group-actions">
-          <button type="button" class="btn-group-mini" title="Topic جدید" onclick="openCreateTopic('${g.id}', event)"><i class="bi bi-hash"></i></button>
+          ${forum ? `<button type="button" class="btn-group-mini" title="Topic جدید" onclick="openCreateTopic('${g.id}', event)"><i class="bi bi-hash"></i></button>` : ''}
         </div>
       </div>
       <div class="topics-collapse ${isOpen ? 'open' : ''}">${topicRows || '<div class="sidebar-msg" style="padding:.45rem 1rem .45rem 2.2rem;font-size:.72rem">Topic ندارد — # را بزنید</div>'}</div>
@@ -429,7 +451,7 @@ function selectTopic(gid, tid) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function syncTopicsForGroup(gid, maxAttempts = 1) {
-  if (!tgOk || !forumOk) return;
+  if (!tgOk) return;
   const icon = document.getElementById('syncIcon');
   if (icon) icon.className = 'bi bi-arrow-clockwise spin';
   try {
@@ -437,6 +459,8 @@ async function syncTopicsForGroup(gid, maxAttempts = 1) {
       const d = await (await fetch(`/api/telegram/topics?group_id=${encodeURIComponent(gid)}`)).json();
       if (d.topics) {
         tgTopicsByGroup[gid] = d.topics;
+        const g = groups.find(x => x.id === gid);
+        if (g && d.is_forum !== undefined) g.is_forum = d.is_forum;
         renderTree();
       }
       if (i < maxAttempts - 1) await sleep(450);
@@ -465,23 +489,31 @@ async function loadLinkCandidates() {
       box.innerHTML = '<p class="text-muted">گروهی یافت نشد.</p>';
       return;
     }
-    box.innerHTML = d.dialogs.map(di => `
-      <div class="link-row ${di.already_linked ? 'disabled' : ''}" data-id="${di.id}" data-title="${esc(di.title)}">
-        <div><strong>${esc(di.title)}</strong><br><small class="text-muted">${di.id} ${di.is_forum ? '· Forum' : ''}</small></div>
+    box.innerHTML = d.dialogs.map(di => {
+      const kindLbl = di.kind === 'channel' ? 'کانال' : (di.is_forum ? 'Forum' : 'گروه');
+      return `
+      <div class="link-row ${di.already_linked ? 'disabled' : ''}" data-id="${di.id}" data-title="${esc(di.title)}"
+        data-forum="${di.is_forum ? '1' : '0'}">
+        <div><strong>${esc(di.title)}</strong><br><small class="text-muted">${di.id} · ${kindLbl}</small></div>
         ${di.already_linked ? '<span class="badge bg-secondary">اضافه شده</span>' : '<i class="bi bi-plus-lg"></i>'}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     box.querySelectorAll('.link-row:not(.disabled)').forEach(el => {
-      el.onclick = () => doLinkGroup(parseInt(el.dataset.id, 10), el.dataset.title);
+      el.onclick = () => doLinkGroup(
+        parseInt(el.dataset.id, 10),
+        el.dataset.title,
+        el.dataset.forum === '1',
+      );
     });
   } catch {
     box.innerHTML = '<p class="text-danger">خطا در دریافت لیست</p>';
   }
 }
 
-async function doLinkGroup(tid, title) {
+async function doLinkGroup(tid, title, isForum = false) {
   const d = await (await fetch('/api/groups/link', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ telegram_id: tid, title }),
+    body: JSON.stringify({ telegram_id: tid, title, is_forum: !!isForum }),
   })).json();
   if (d.ok) {
     await loadConfigFromServer();
@@ -503,9 +535,10 @@ async function doCreateGroup() {
   const btn = document.getElementById('createGroupBtn');
   btn.disabled = true;
   try {
+    const forum = document.getElementById('newGroupForum')?.checked !== false;
     const d = await (await fetch('/api/groups/create', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, forum }),
     })).json();
     if (d.ok) {
       await loadConfigFromServer();
@@ -675,6 +708,11 @@ function openCreateTopic(gid, ev) {
   if (ev) ev.stopPropagation();
   const g = gid || selGroupId;
   if (!g) { showToast('گروه مشخص نیست', 'warning'); return; }
+  const grp = groups.find(x => x.id === g);
+  if (grp && !groupIsForum(grp)) {
+    showToast('این گروه Forum نیست — روی «چت اصلی» سورس اضافه کنید', 'warning');
+    return;
+  }
   selGroupId = g;
   if (!tgOk) { openTelethonSetup(false); return; }
   document.getElementById('newTopicTitle').value = '';
@@ -818,7 +856,9 @@ function renderTopicDetail() {
           <button class="src-del" onclick="deleteSource(${si})"><i class="bi bi-x-circle-fill"></i></button>
         </div>${renderFilterRules(si, src.filters || [])}</div>`).join('')
       : '<div class="no-sources"><i class="bi bi-inbox"></i>سورسی نیست</div>'}
-    <button class="btn-add-src mt-2" onclick="addSource()"><i class="bi bi-plus-circle"></i> سورس جدید</button>`;
+    <button class="btn-add-src mt-2" onclick="addSource()"><i class="bi bi-plus-circle"></i> سورس جدید</button>
+    <p class="text-warning mt-3 mb-0" style="font-size:.78rem"><i class="bi bi-exclamation-triangle me-1"></i>
+      پس از افزودن سورس‌ها حتماً <strong>ذخیره تغییرات</strong> را بزنید تا فوروارد فعال شود.</p>`;
 }
 
 function goHome() {
@@ -827,10 +867,56 @@ function goHome() {
   loadDashboard();
 }
 
+async function deleteGroupFromList(gid) {
+  if (!confirm('این گروه فقط از لیست TeleFilter حذف می‌شود.\nدر تلگرام باقی می‌ماند. ادامه؟')) return;
+  try {
+    const d = await (await fetch(`/api/groups/${encodeURIComponent(gid)}`, { method: 'DELETE' })).json();
+    if (d.ok) {
+      await loadConfigFromServer();
+      delete tgTopicsByGroup[gid];
+      goHome();
+      showToast('از لیست حذف شد ✓', 'success');
+    } else showToast('خطا در حذف', 'danger');
+  } catch { showToast('خطای شبکه', 'danger'); }
+}
+
+async function inviteGroupMember(gid) {
+  const inp = document.getElementById('inviteMemberInput');
+  const user = inp?.value?.trim();
+  if (!user) { showToast('username یا ID وارد کنید', 'warning'); return; }
+  try {
+    const d = await (await fetch(`/api/groups/${encodeURIComponent(gid)}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user }),
+    })).json();
+    if (d.ok) {
+      showToast(d.msg || 'دعوت ارسال شد ✓', 'success');
+      if (inp) inp.value = '';
+      loadGroupDashboard(gid);
+    } else showToast(d.msg || 'خطا', 'danger');
+  } catch { showToast('خطای شبکه', 'danger'); }
+}
+
+async function removeGroupMember(gid, memberId) {
+  if (!confirm('این کاربر از گروه حذف شود؟')) return;
+  try {
+    const d = await (await fetch(`/api/groups/${encodeURIComponent(gid)}/members/${memberId}`, {
+      method: 'DELETE',
+    })).json();
+    if (d.ok) {
+      showToast('عضو حذف شد ✓', 'success');
+      loadGroupDashboard(gid);
+    } else showToast(d.msg || 'خطا', 'danger');
+  } catch { showToast('خطای شبکه', 'danger'); }
+}
+
 async function saveAll() {
   const outGroups = groups.map(g => {
     const topics = [];
-    const tlist = tgTopicsByGroup[g.id] || [];
+    let tlist = tgTopicsByGroup[g.id] || [];
+    if (!tlist.length && !groupIsForum(g)) {
+      tlist = [{ id: 0, title: 'چت اصلی' }];
+    }
     for (const t of tlist) {
       const data = cfgMap[cfgKey(g.id, t.id)];
       if (data?.sources?.length) {
@@ -843,7 +929,9 @@ async function saveAll() {
       if (topics.some(x => x.topic_id === tid)) continue;
       topics.push({ topic_id: tid, name: '', sources: data.sources });
     }
-    return { id: g.id, title: g.title, telegram_id: g.telegram_id, origin: g.origin, topics };
+    const row = { id: g.id, title: g.title, telegram_id: g.telegram_id, origin: g.origin, topics };
+    if (g.is_forum !== undefined) row.is_forum = g.is_forum;
+    return row;
   });
   const res = await fetch('/api/config', {
     method: 'POST',
@@ -939,10 +1027,5 @@ async function bootMain() {
     await syncAllTopics();
     renderTree();
   }
-  setInterval(async () => {
-    await refreshStatus();
-    if (selTopicId) return;
-    if (selGroupId) loadGroupDashboard(selGroupId);
-    else loadDashboard();
-  }, 12000);
+  setInterval(refreshStatus, 30000);
 }

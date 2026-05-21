@@ -28,9 +28,10 @@ with open(args.config, 'r', encoding='utf-8') as f:
 
 client = TelegramClient(args.session, config['api_id'], config['api_hash'])
 
-# source_map: {peer_id: [(target_entity, topic_id, filters, group_gid), ...]}
+# source_map: {peer_id: [(group_gid, topic_id, filters, is_forum), ...]}
 source_map: dict[int, list] = {}
 target_entities: dict[str, object] = {}
+target_forum: dict[str, bool] = {}
 
 
 async def _resolve_entity(client, identifier):
@@ -61,15 +62,22 @@ async def _resolve_entity(client, identifier):
 
     raise ValueError(
         f"Cannot find entity '{identifier}'.\n"
-        f"    ► مطمئن شو اکانت تلگرام عضو این گروه است.\n"
-        f"    ► یا از @username گروه به جای ID استفاده کن."
+        f"    ► مطمئن شو اکانت تلگرام عضو این گروه/کانال است.\n"
+        f"    ► یا از @username به جای ID استفاده کن."
     )
 
 
+def _group_is_forum(group: dict, entity) -> bool:
+    if 'is_forum' in group and group['is_forum'] is not None:
+        return bool(group['is_forum'])
+    return bool(getattr(entity, 'forum', False))
+
+
 async def setup():
-    global target_entities, source_map
+    global target_entities, source_map, target_forum
     source_map = {}
     target_entities = {}
+    target_forum = {}
 
     for group in config.get('groups') or []:
         gid = group.get('id', '')
@@ -82,18 +90,30 @@ async def setup():
         try:
             entity = await _resolve_entity(client, int(tg_id))
             target_entities[gid] = entity
-            logger.info(f"Target group: {getattr(entity, 'title', title)}")
+            is_forum = _group_is_forum(group, entity)
+            target_forum[gid] = is_forum
+            logger.info(f"Target: {getattr(entity, 'title', title)} ({'forum' if is_forum else 'عادی/کانال'})")
         except Exception as e:
             logger.error(f"  [گروه {title}] resolve failed: {e}")
             continue
 
-        for topic in group.get('topics') or []:
-            topic_id = topic['topic_id']
+        topics = group.get('topics') or []
+        if not topics and not is_forum:
+            topics = [{'topic_id': 0, 'name': 'چت اصلی', 'sources': []}]
+
+        for topic in topics:
+            topic_id = topic.get('topic_id')
+            if topic_id is None:
+                continue
+            topic_id = int(topic_id)
             topic_name = topic.get('name', str(topic_id))
+            use_topic = is_forum
 
             for source in topic.get('sources') or []:
                 chat = source.get('chat', '')
-                filters = source.get('filters', [])
+                filters = source.get('filters') or []
+                if not str(chat).strip():
+                    continue
 
                 try:
                     chat_val = chat
@@ -108,18 +128,20 @@ async def setup():
 
                     if peer_id not in source_map:
                         source_map[peer_id] = []
-                    source_map[peer_id].append((gid, topic_id, filters))
+                    source_map[peer_id].append((gid, topic_id, filters, use_topic))
 
+                    dest = f"{title} / {topic_name}" if use_topic else title
                     filter_info = f"{len(filters)} فیلتر" if filters else "همه پیام‌ها"
-                    logger.info(f"  [{title} / {topic_name}] ← {name}  ({filter_info})")
+                    logger.info(f"  [{dest}] ← {name}  ({filter_info})")
                 except ValueError:
                     logger.warning(
                         f"  [{topic_name}] '{chat}' پیدا نشد.\n"
-                        f"    ► اگر چت خصوصی است، ابتدا یک پیام به او بفرست یا\n"
-                        f"      بجای User ID عددی از @username استفاده کن."
+                        f"    ► اکانت باید عضو سورس باشد یا از @username استفاده کن."
                     )
                 except Exception as e:
                     logger.error(f"  [{topic_name}] Could not resolve '{chat}': {e}")
+
+    logger.info(f"Active routes: {sum(len(v) for v in source_map.values())}")
 
 
 def _matches_filters(text: str, filters: list) -> bool:
@@ -133,46 +155,58 @@ def _matches_filters(text: str, filters: list) -> bool:
     return False
 
 
+async def _forward_to_target(event, group_gid, topic_id, use_topic):
+    target = target_entities.get(group_gid)
+    if not target:
+        return
+    kwargs = {
+        'from_peer': event.chat_id,
+        'id': [event.message.id],
+        'to_peer': target,
+        'random_id': [random.randint(1, 2**63)],
+    }
+    if use_topic:
+        kwargs['top_msg_id'] = topic_id
+    await client(ForwardMessagesRequest(**kwargs))
+
+
 @client.on(events.NewMessage())
 async def forward_handler(event):
-    entries = source_map.get(event.chat_id)
+    if event.out:
+        return
+
+    chat = await event.get_chat()
+    peer_id = get_peer_id(chat)
+    entries = source_map.get(peer_id) or source_map.get(event.chat_id)
     if not entries:
         return
 
     text = (event.message.text or event.message.message or '').lower()
 
-    for group_gid, topic_id, filters in entries:
+    for group_gid, topic_id, filters, use_topic in entries:
         if not _matches_filters(text, filters):
             continue
-
-        target = target_entities.get(group_gid)
-        if not target:
-            continue
-
         try:
-            await client(ForwardMessagesRequest(
-                from_peer=event.chat_id,
-                id=[event.message.id],
-                to_peer=target,
-                top_msg_id=topic_id,
-                random_id=[random.randint(1, 2**63)]
-            ))
-            logger.info(f"Forwarded  chat={event.chat_id}  →  group={group_gid} topic={topic_id}")
-            record_forward(args.user_id, group_gid, topic_id, event.chat_id)
+            await _forward_to_target(event, group_gid, topic_id, use_topic)
+            dest = f"group={group_gid}" + (f" topic={topic_id}" if use_topic else "")
+            logger.info(f"Forwarded chat={peer_id} → {dest}")
+            record_forward(args.user_id, group_gid, topic_id if use_topic else 0, peer_id)
         except Exception as e:
-            logger.error(f"Forward failed (chat={event.chat_id}, topic={topic_id}): {e}")
+            logger.error(f"Forward failed (chat={peer_id}, group={group_gid}, topic={topic_id}): {e}")
 
 
 async def main():
     await client.connect()
     if not await client.is_user_authorized():
         logger.error(
-            "Session not authorized. Complete phone login in the panel once."
+            "Session not authorized. Complete phone/QR login in the panel once."
         )
         raise SystemExit(1)
     await setup()
     if not source_map:
-        logger.warning("No sources configured — waiting for messages anyway.")
+        logger.warning(
+            "No sources configured — add sources in panel, then SAVE (ذخیره تغییرات)."
+        )
     logger.info("TeleFilter is running. Press Ctrl+C to stop.")
     await client.run_until_disconnected()
 

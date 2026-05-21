@@ -45,13 +45,16 @@ def normalize_config(raw: dict) -> dict:
 
 
 def _norm_group(g: dict) -> dict:
-    return {
+    out = {
         'id': g.get('id') or new_group_id(),
         'title': g.get('title') or 'گروه',
         'telegram_id': str(g.get('telegram_id', '')),
         'origin': g.get('origin', 'linked'),
         'topics': g.get('topics') or [],
     }
+    if 'is_forum' in g:
+        out['is_forum'] = bool(g['is_forum'])
+    return out
 
 
 def find_group(cfg: dict, group_id: str) -> dict | None:

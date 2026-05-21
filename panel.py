@@ -23,7 +23,7 @@ from telethon import TelegramClient
 from telethon.errors import (
     SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError,
 )
-from telethon.tl.types import MessageService, Channel, MessageActionTopicCreate
+from telethon.tl.types import MessageService, Channel, Chat, MessageActionTopicCreate
 from telethon.utils import get_peer_id
 
 from config_util import (
@@ -33,25 +33,31 @@ from config_util import (
 
 try:
     from telethon.tl.functions.messages import GetForumTopicsRequest, CreateForumTopicRequest
-    from telethon.tl.functions.channels import CreateChannelRequest, GetFullChannelRequest
+    from telethon.tl.functions.channels import (
+        CreateChannelRequest, GetFullChannelRequest, InviteToChannelRequest,
+    )
+    HAS_INVITE_API = True
     from telethon.tl.types import InputChannel
     HAS_FORUM_API = True
     HAS_CREATE_CHANNEL = True
     HAS_FULL_CHANNEL = True
+    HAS_INVITE_API = True
 except ImportError:
     try:
         from telethon.tl.functions.channels import (
             GetForumTopicsRequest, CreateForumTopicRequest, CreateChannelRequest,
-            GetFullChannelRequest,
+            GetFullChannelRequest, InviteToChannelRequest,
         )
         from telethon.tl.types import InputChannel
         HAS_FORUM_API = True
         HAS_CREATE_CHANNEL = True
         HAS_FULL_CHANNEL = True
+        HAS_INVITE_API = True
     except ImportError:
         HAS_FORUM_API = False
         HAS_CREATE_CHANNEL = False
         HAS_FULL_CHANNEL = False
+        HAS_INVITE_API = False
 
 # ══════════════════════════════════════════════════════════
 #  Paths
@@ -602,8 +608,11 @@ def get_status():
     uid = cur_uid()
     ensure_client(uid)
     user = db_get_user(uid)
+    cfg = load_user_config(uid)
+    cstats = config_stats(cfg)
     return jsonify({
         'connected':        tg_ok(uid),
+        'sources_configured': cstats.get('sources', 0),
         'panel_ready':      tg_ok(uid),
         'has_client':       _tg_clients.get(uid) is not None,
         'has_forum_api':    HAS_FORUM_API,
@@ -843,6 +852,30 @@ def _fetch_forum_topics(c, tg_gid: int):
     )))
 
 
+def _peer_is_forum(c, tg_gid: int, cfg: dict, group_id: str) -> bool:
+    g = find_group(cfg, group_id) if group_id else None
+    if g and 'is_forum' in g:
+        return bool(g['is_forum'])
+    try:
+        ent = tg_run(c.get_entity(tg_gid))
+        return bool(getattr(ent, 'forum', False))
+    except Exception:
+        return True
+
+
+def _resolve_member(c, ref: str):
+    ref = (ref or '').strip()
+    if not ref:
+        raise ValueError('شناسه عضو خالی است')
+    if ref.startswith('@'):
+        ref = ref[1:]
+    try:
+        uid = int(ref)
+        return tg_run(c.get_entity(uid))
+    except (TypeError, ValueError):
+        return tg_run(c.get_entity(ref))
+
+
 def _topic_id_from_create_result(result, c, tg_gid: int, title: str) -> int | None:
     for upd in getattr(result, 'updates', []) or []:
         msg = getattr(upd, 'message', None)
@@ -953,19 +986,32 @@ def list_tg_dialogs():
 
     async def _fetch():
         items = []
-        async for d in c.iter_dialogs(limit=200):
+        async for d in c.iter_dialogs(limit=300):
             ent = d.entity
-            if not isinstance(ent, Channel):
-                continue
-            if not (getattr(ent, 'megagroup', False) or getattr(ent, 'gigagroup', False)):
-                continue
             tid = str(d.id)
-            items.append({
-                'id': d.id,
-                'title': d.name or tid,
-                'is_forum': bool(getattr(ent, 'forum', False)),
-                'already_linked': tid in linked,
-            })
+            if isinstance(ent, Channel):
+                if not (
+                    getattr(ent, 'megagroup', False)
+                    or getattr(ent, 'gigagroup', False)
+                    or getattr(ent, 'broadcast', False)
+                ):
+                    continue
+                kind = 'channel' if getattr(ent, 'broadcast', False) else 'supergroup'
+                items.append({
+                    'id': d.id,
+                    'title': d.name or tid,
+                    'is_forum': bool(getattr(ent, 'forum', False)),
+                    'kind': kind,
+                    'already_linked': tid in linked,
+                })
+            elif isinstance(ent, Chat):
+                items.append({
+                    'id': d.id,
+                    'title': d.name or tid,
+                    'is_forum': False,
+                    'kind': 'group',
+                    'already_linked': tid in linked,
+                })
         return items
 
     try:
@@ -985,6 +1031,7 @@ def link_group():
     except (TypeError, ValueError):
         return jsonify({'error': 'invalid_id'}), 400
     title = (data.get('title') or '').strip() or str(telegram_id)
+    is_forum = bool(data.get('is_forum', False))
     cfg = load_user_config(uid)
     for g in cfg.get('groups') or []:
         if str(g.get('telegram_id')) == str(telegram_id):
@@ -994,6 +1041,7 @@ def link_group():
         'title': title,
         'telegram_id': str(telegram_id),
         'origin': 'linked',
+        'is_forum': is_forum,
         'topics': [],
     }
     cfg.setdefault('groups', []).append(g)
@@ -1011,7 +1059,9 @@ def create_group():
         return jsonify({'error': 'not_connected'}), 503
     if not HAS_CREATE_CHANNEL:
         return jsonify({'error': 'no_api', 'msg': 'telethon upgrade required'}), 501
-    title = (request.get_json() or {}).get('title', '').strip()
+    data = request.get_json() or {}
+    title = data.get('title', '').strip()
+    use_forum = bool(data.get('forum', True))
     if not title:
         return jsonify({'error': 'no_title'}), 400
 
@@ -1020,7 +1070,7 @@ def create_group():
             title=title,
             about='TeleFilter',
             megagroup=True,
-            forum=True,
+            forum=use_forum,
         ))
 
     try:
@@ -1033,6 +1083,7 @@ def create_group():
             'title': title,
             'telegram_id': str(telegram_id),
             'origin': 'created',
+            'is_forum': use_forum,
             'topics': [],
         }
         cfg.setdefault('groups', []).append(g)
@@ -1057,6 +1108,56 @@ def delete_group(group_id: str):
     return jsonify({'ok': True})
 
 
+@app.route('/api/groups/<group_id>/members', methods=['POST'])
+@login_required
+def group_add_member(group_id: str):
+    uid = cur_uid()
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'error': 'not_connected'}), 503
+    if not HAS_INVITE_API:
+        return jsonify({'error': 'no_api'}), 501
+    cfg = load_user_config(uid)
+    tg_gid = _group_telegram_id(cfg, group_id)
+    if tg_gid is None:
+        return jsonify({'error': 'no_group'}), 404
+    ref = (request.get_json() or {}).get('user', '').strip()
+    try:
+        user_ent = _resolve_member(c, ref)
+        channel = tg_run(c.get_entity(tg_gid))
+
+        async def _invite():
+            await c(InviteToChannelRequest(channel=channel, users=[user_ent]))
+
+        tg_run(_invite())
+        return jsonify({'ok': True, 'msg': 'دعوت ارسال شد'})
+    except Exception as e:
+        return jsonify({'error': 'api', 'msg': str(e)}), 500
+
+
+@app.route('/api/groups/<group_id>/members/<int:member_id>', methods=['DELETE'])
+@login_required
+def group_remove_member(group_id: str, member_id: int):
+    uid = cur_uid()
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'error': 'not_connected'}), 503
+    cfg = load_user_config(uid)
+    tg_gid = _group_telegram_id(cfg, group_id)
+    if tg_gid is None:
+        return jsonify({'error': 'no_group'}), 404
+    try:
+        channel = tg_run(c.get_entity(tg_gid))
+
+        async def _kick():
+            await c.kick_participant(channel, member_id)
+
+        tg_run(_kick())
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': 'api', 'msg': str(e)}), 500
+
+
 @app.route('/api/telegram/topics', methods=['GET'])
 @login_required
 def get_tg_topics():
@@ -1074,8 +1175,17 @@ def get_tg_topics():
     if tg_gid is None:
         return jsonify({'error': 'no_group', 'msg': 'ابتدا یک گروه اضافه کن'}), 400
     try:
+        is_forum = _peer_is_forum(c, tg_gid, cfg, group_id)
+        if not is_forum:
+            return jsonify({
+                'topics': [{'id': 0, 'title': 'چت اصلی'}],
+                'is_forum': False,
+            })
         result = _fetch_forum_topics(c, tg_gid)
-        return jsonify({'topics': [{'id': t.id, 'title': t.title} for t in result.topics]})
+        return jsonify({
+            'topics': [{'id': t.id, 'title': t.title} for t in result.topics],
+            'is_forum': True,
+        })
     except Exception as e:
         return jsonify({'error': 'api', 'msg': str(e)}), 500
 
@@ -1097,6 +1207,8 @@ def create_tg_topic():
     tg_gid = _group_telegram_id(cfg, group_id)
     if tg_gid is None:
         return jsonify({'error': 'no_group', 'msg': 'گروه انتخاب نشده'}), 400
+    if not _peer_is_forum(c, tg_gid, cfg, group_id):
+        return jsonify({'error': 'not_forum', 'msg': 'این گروه Forum نیست — از «چت اصلی» برای فوروارد استفاده کن'}), 400
     try:
         result = tg_run(c(CreateForumTopicRequest(
             peer=tg_gid, title=title, random_id=secrets.randbits(63),
