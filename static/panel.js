@@ -426,16 +426,23 @@ function selectTopic(gid, tid) {
   renderTopicDetail();
 }
 
-async function syncTopicsForGroup(gid) {
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function syncTopicsForGroup(gid, maxAttempts = 1) {
   if (!tgOk || !forumOk) return;
   const icon = document.getElementById('syncIcon');
   if (icon) icon.className = 'bi bi-arrow-clockwise spin';
   try {
-    const d = await (await fetch(`/api/telegram/topics?group_id=${encodeURIComponent(gid)}`)).json();
-    if (d.topics) tgTopicsByGroup[gid] = d.topics;
+    for (let i = 0; i < maxAttempts; i++) {
+      const d = await (await fetch(`/api/telegram/topics?group_id=${encodeURIComponent(gid)}`)).json();
+      if (d.topics) {
+        tgTopicsByGroup[gid] = d.topics;
+        renderTree();
+      }
+      if (i < maxAttempts - 1) await sleep(450);
+    }
   } catch { /* silent */ }
   if (icon) icon.className = 'bi bi-arrow-clockwise';
-  renderTree();
 }
 
 async function syncAllTopics() {
@@ -480,7 +487,7 @@ async function doLinkGroup(tid, title) {
     await loadConfigFromServer();
     linkGroupMdl.hide();
     showToast('گروه اضافه شد ✓', 'success');
-    await syncTopicsForGroup(d.group.id);
+    await syncTopicsForGroup(d.group.id, 5);
     selectGroup(d.group.id);
   }
 }
@@ -504,7 +511,7 @@ async function doCreateGroup() {
       await loadConfigFromServer();
       createGroupMdl.hide();
       showToast('گروه ساخته شد ✓', 'success');
-      await syncTopicsForGroup(d.group.id);
+      await syncTopicsForGroup(d.group.id, 5);
       selectGroup(d.group.id);
     } else showToast(d.msg || 'خطا', 'danger');
   } catch { showToast('خطای شبکه', 'danger'); }
@@ -685,11 +692,18 @@ async function doCreateTopic() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, group_id: selGroupId }),
     })).json();
-    if (d.ok && d.topic_id) {
+    if (d.ok) {
       createMdl.hide();
-      await syncTopicsForGroup(selGroupId);
-      selectTopic(selGroupId, d.topic_id);
-      showToast(`Topic «${d.title}» ساخته شد ✓`, 'success');
+      expandedGroups.add(selGroupId);
+      await syncTopicsForGroup(selGroupId, 6);
+      let tid = d.topic_id;
+      if (!tid && tgTopicsByGroup[selGroupId]) {
+        const found = [...tgTopicsByGroup[selGroupId]].reverse().find(t => t.title === title);
+        if (found) tid = found.id;
+      }
+      if (tid) selectTopic(selGroupId, tid);
+      else renderTree();
+      showToast(`Topic «${title}» ساخته شد ✓`, 'success');
     } else showToast(d.msg || 'خطا', 'danger');
   } catch { showToast('خطای شبکه', 'danger'); }
   btn.disabled = false;

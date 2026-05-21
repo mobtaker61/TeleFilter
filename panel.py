@@ -20,8 +20,10 @@ from collections import deque
 from functools import wraps
 from flask import Flask, render_template, jsonify, request, session, redirect, url_for
 from telethon import TelegramClient
-from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
-from telethon.tl.types import MessageService, Channel
+from telethon.errors import (
+    SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError,
+)
+from telethon.tl.types import MessageService, Channel, MessageActionTopicCreate
 from telethon.utils import get_peer_id
 
 from config_util import (
@@ -835,6 +837,33 @@ def _group_telegram_id(cfg: dict, group_id: str) -> int | None:
         return None
 
 
+def _fetch_forum_topics(c, tg_gid: int):
+    return tg_run(c(GetForumTopicsRequest(
+        peer=tg_gid, offset_date=None, offset_id=0, offset_topic=0, limit=100, q=None
+    )))
+
+
+def _topic_id_from_create_result(result, c, tg_gid: int, title: str) -> int | None:
+    for upd in getattr(result, 'updates', []) or []:
+        msg = getattr(upd, 'message', None)
+        if not msg:
+            continue
+        act = getattr(msg, 'action', None)
+        if isinstance(act, MessageActionTopicCreate):
+            return msg.id
+    for attempt in range(5):
+        if attempt:
+            time.sleep(0.4)
+        try:
+            res = _fetch_forum_topics(c, tg_gid)
+            matches = [t for t in res.topics if getattr(t, 'title', None) == title]
+            if matches:
+                return matches[-1].id
+        except Exception:
+            pass
+    return None
+
+
 @app.route('/api/dashboard/stats')
 @login_required
 def api_dashboard_stats():
@@ -1045,9 +1074,7 @@ def get_tg_topics():
     if tg_gid is None:
         return jsonify({'error': 'no_group', 'msg': 'ابتدا یک گروه اضافه کن'}), 400
     try:
-        result = tg_run(c(GetForumTopicsRequest(
-            peer=tg_gid, offset_date=None, offset_id=0, offset_topic=0, limit=100, q=None
-        )))
+        result = _fetch_forum_topics(c, tg_gid)
         return jsonify({'topics': [{'id': t.id, 'title': t.title} for t in result.topics]})
     except Exception as e:
         return jsonify({'error': 'api', 'msg': str(e)}), 500
@@ -1072,17 +1099,13 @@ def create_tg_topic():
         return jsonify({'error': 'no_group', 'msg': 'گروه انتخاب نشده'}), 400
     try:
         result = tg_run(c(CreateForumTopicRequest(
-            peer=tg_gid, title=title, random_id=random.randint(1, 2**31)
+            peer=tg_gid, title=title, random_id=secrets.randbits(63),
         )))
-        topic_id = None
-        for upd in result.updates:
-            msg = getattr(upd, 'message', None)
-            if isinstance(msg, MessageService):
-                topic_id = msg.id; break
-        if topic_id is None:
-            for upd in result.updates:
-                if hasattr(upd, 'id'): topic_id = upd.id; break
+        topic_id = _topic_id_from_create_result(result, c, tg_gid, title)
         return jsonify({'ok': True, 'topic_id': topic_id, 'title': title, 'group_id': group_id})
+    except FloodWaitError as e:
+        sec = int(getattr(e, 'seconds', 30) or 30)
+        return jsonify({'error': 'flood', 'msg': f'تلگرام محدودیت گذاشته — حدود {sec} ثانیه صبر کن'}), 429
     except Exception as e:
         return jsonify({'error': 'api', 'msg': str(e)}), 500
 
