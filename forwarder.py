@@ -21,7 +21,16 @@ from config_util import (
     parse_value, record_rate, get_rates,
     get_last_chart_msg, save_last_chart_msg,
 )
-from charts import render_rate_chart
+# charts را lazy لود می‌کنیم تا اگر matplotlib در سرور دچار خطا شد،
+# فوروارد عادی همچنان کار کند.
+try:
+    from charts import render_rate_chart, is_available as charts_available
+except Exception as _e:  # noqa: BLE001
+    render_rate_chart = None  # type: ignore[assignment]
+
+    def charts_available() -> bool:  # type: ignore[no-redef]
+        return False
+    logging.getLogger('telefilter.forwarder').error("charts module load failed: %s", _e)
 
 logger = logging.getLogger('telefilter.forwarder')
 
@@ -179,15 +188,23 @@ async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
         logger.warning("[%s] chart: parse failed for topic=%s (regex=%r)", uid, tid, value_regex)
         return
     record_rate(uid, gid, tid, value, raw_match or '', None)
+
+    if render_rate_chart is None or not charts_available():
+        logger.debug("[%s] chart skipped (matplotlib unavailable); rate recorded only", uid)
+        return
+
     try:
         rates = get_rates(uid, gid, tid, since_hours=24 * 7)
         png = render_rate_chart(
             rates,
-            title=route.get('chart_label') or f"نمودار Topic {tid}",
+            title=route.get('chart_label') or f"Topic {tid}",
             y_label=route.get('chart_label') or '',
         )
     except Exception as e:
         logger.error("[%s] chart render failed: %s", uid, e)
+        return
+    if not png:
+        logger.warning("[%s] chart render returned empty", uid)
         return
 
     old_msg = get_last_chart_msg(uid, gid, tid)
