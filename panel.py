@@ -330,6 +330,10 @@ class _PanelLogHandler(logging.Handler):
 _panel_log = logging.getLogger('telefilter.forwarder')
 _panel_log.setLevel(logging.INFO)
 _panel_log.addHandler(_PanelLogHandler())
+# لاگ‌های ماژول chart (خطا/هشدار) هم به لاگ خود کاربر منتقل می‌شود
+_charts_log = logging.getLogger('telefilter.charts')
+_charts_log.setLevel(logging.INFO)
+_charts_log.addHandler(_PanelLogHandler())
 
 
 def fwd_status(uid: int) -> str:
@@ -807,12 +811,15 @@ def fwd_diag():
     data = fwd._routes.get(uid) or {'source_map': {}, 'targets': {}, 'forum': {}}
     sources = []
     for peer_id, entries in data['source_map'].items():
-        for gid, tid, filt, is_forum in entries:
+        for r in entries:
             sources.append({
                 'peer_id': peer_id,
-                'group_id': gid,
-                'topic_id': tid if is_forum else None,
-                'filters': filt,
+                'group_id': r.get('gid'),
+                'topic_id': r.get('topic_id') if r.get('is_forum') else None,
+                'filters': r.get('filters') or [],
+                'chart_enabled': bool(r.get('chart_enabled')),
+                'value_regex': r.get('value_regex') or '',
+                'chart_label': r.get('chart_label') or '',
             })
     targets = [
         {'group_id': gid, 'title': getattr(ent, 'title', '') or getattr(ent, 'first_name', '') or str(gid)}
@@ -828,6 +835,120 @@ def fwd_diag():
         'sources': sources,
         'targets': targets,
     })
+
+
+@app.route('/api/charts/status')
+@login_required
+def api_chart_status():
+    """وضعیت matplotlib + لیست تاپیک‌هایی که چارت فعال دارند."""
+    try:
+        import charts as _charts
+        ok = _charts.is_available()
+        err = _charts.load_error() if not ok else ''
+    except Exception as e:
+        ok, err = False, f'charts module load failed: {e}'
+
+    uid = cur_uid()
+    cfg = load_user_config(uid)
+    enabled_topics = []
+    for g in cfg.get('groups') or []:
+        for t in g.get('topics') or []:
+            if not t.get('chart_enabled'):
+                continue
+            srcs = []
+            for s in t.get('sources') or []:
+                srcs.append({
+                    'chat': s.get('chat', ''),
+                    'value_regex': s.get('value_regex', '') or '',
+                })
+            enabled_topics.append({
+                'group_id': g.get('id'),
+                'group_title': g.get('title', ''),
+                'topic_id': t.get('topic_id'),
+                'name': t.get('name', ''),
+                'chart_label': t.get('chart_label', '') or '',
+                'sources': srcs,
+            })
+    return jsonify({
+        'matplotlib_available': ok,
+        'error': err,
+        'install_hint': 'pip install matplotlib و sudo apt install -y libgl1 libglib2.0-0',
+        'enabled_topics': enabled_topics,
+    })
+
+
+@app.route('/api/charts/<group_id>/<int:topic_id>/test_send', methods=['POST'])
+@login_required
+def api_chart_test_send(group_id: str, topic_id: int):
+    """ارسال دستی چارت آزمایشی به گروه/تاپیک برای دیباگ.
+    حتی اگر داده‌ای ثبت نشده باشد، یک placeholder ارسال می‌کند تا مشکل send_file
+    (مجوز/topic_id/...) از مشکل parse تفکیک شود.
+    """
+    uid = cur_uid()
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'ok': False, 'msg': 'اتصال تلگرام برقرار نیست'}), 503
+
+    try:
+        import charts as _charts
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': f'charts module load failed: {e}'}), 500
+
+    if not _charts.is_available():
+        return jsonify({
+            'ok': False,
+            'msg': 'matplotlib در دسترس نیست',
+            'error': _charts.load_error(),
+            'hint': 'sudo apt install -y libgl1 libglib2.0-0 && pip install matplotlib',
+        }), 500
+
+    cfg = load_user_config(uid)
+    g = find_group(cfg, group_id)
+    if not g:
+        return jsonify({'ok': False, 'msg': 'گروه یافت نشد'}), 404
+    is_forum = bool(g.get('is_forum'))
+    chart_label = ''
+    for t in g.get('topics') or []:
+        if int(t.get('topic_id') or 0) == int(topic_id):
+            chart_label = t.get('chart_label') or t.get('name') or ''
+            break
+
+    rates = get_rates(uid, group_id, topic_id, since_hours=24 * 7)
+    try:
+        png = _charts.render_rate_chart(
+            rates,
+            title=chart_label or f"Topic {topic_id} (test)",
+            y_label=chart_label or '',
+        )
+    except Exception as e:
+        return jsonify({'ok': False, 'stage': 'render', 'msg': str(e)}), 500
+    if not png:
+        return jsonify({'ok': False, 'stage': 'render', 'msg': 'render returned empty'}), 500
+
+    async def _send():
+        target = await c.get_entity(int(g['telegram_id']))
+        old = fwd.get_last_chart_msg(uid, group_id, topic_id) if hasattr(fwd, 'get_last_chart_msg') else None
+        from config_util import get_last_chart_msg as _glcm, save_last_chart_msg as _slcm
+        old = _glcm(uid, group_id, topic_id)
+        if old:
+            try:
+                await c.delete_messages(target, [int(old)])
+            except Exception:
+                pass
+        kwargs = {'caption': f'📊 {chart_label} (test)', 'force_document': False}
+        if is_forum and topic_id and topic_id > 0:
+            kwargs['reply_to'] = int(topic_id)
+        sent = await c.send_file(target, file=png, **kwargs)
+        if sent and hasattr(sent, 'id'):
+            _slcm(uid, group_id, topic_id, int(sent.id))
+            return int(sent.id)
+        return None
+
+    try:
+        msg_id = tg_run(_send(), timeout=45)
+        return jsonify({'ok': True, 'message_id': msg_id, 'rates_count': len(rates)})
+    except Exception as e:
+        return jsonify({'ok': False, 'stage': 'send', 'msg': str(e)}), 500
 
 # ══════════════════════════════════════════════════════════
 #  Routes — API: Auth (Telegram login from panel)

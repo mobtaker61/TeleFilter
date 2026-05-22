@@ -185,12 +185,21 @@ async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
     value_regex = route.get('value_regex') or None
     value, raw_match = parse_value(raw_text, value_regex)
     if value is None:
-        logger.warning("[%s] chart: parse failed for topic=%s (regex=%r)", uid, tid, value_regex)
+        logger.warning(
+            "[%s] chart: regex match failed topic=%s regex=%r sample=%r",
+            uid, tid, value_regex, (raw_text or '')[:120],
+        )
         return
     record_rate(uid, gid, tid, value, raw_match or '', None)
+    logger.info("[%s] chart: value=%s recorded topic=%s", uid, value, tid)
 
     if render_rate_chart is None or not charts_available():
-        logger.debug("[%s] chart skipped (matplotlib unavailable); rate recorded only", uid)
+        logger.warning(
+            "[%s] chart: matplotlib در دسترس نیست — تصویر ارسال نشد (نرخ ذخیره شد). "
+            "روی سرور این را اجرا کنید: pip install matplotlib && "
+            "sudo apt-get install -y libgl1 libglib2.0-0",
+            uid,
+        )
         return
 
     try:
@@ -201,7 +210,7 @@ async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
             y_label=route.get('chart_label') or '',
         )
     except Exception as e:
-        logger.error("[%s] chart render failed: %s", uid, e)
+        logger.error("[%s] chart render failed: %s", uid, e, exc_info=True)
         return
     if not png:
         logger.warning("[%s] chart render returned empty", uid)
@@ -211,8 +220,9 @@ async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
     if old_msg:
         try:
             await client.delete_messages(target, [int(old_msg)])
+            logger.info("[%s] chart: deleted previous msg=%s", uid, old_msg)
         except Exception as e:
-            logger.debug("[%s] delete old chart msg failed: %s", uid, e)
+            logger.warning("[%s] chart: delete old msg=%s failed: %s", uid, old_msg, e)
 
     last_str = f"{int(value):,}" if value == int(value) else f"{value:,.4f}".rstrip('0').rstrip('.')
     caption = f"📊 {route.get('chart_label') or ''}\nآخرین: {last_str}".strip()
@@ -224,8 +234,10 @@ async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
         if sent and hasattr(sent, 'id'):
             save_last_chart_msg(uid, gid, tid, int(sent.id))
             logger.info("[%s] chart sent topic=%s msg=%s value=%s", uid, tid, sent.id, value)
+        else:
+            logger.warning("[%s] chart sent but no id returned: %r", uid, sent)
     except Exception as e:
-        logger.error("[%s] chart send failed: %s", uid, e)
+        logger.error("[%s] chart send failed topic=%s: %s", uid, tid, e, exc_info=True)
 
 
 def install_handler(uid: int, client):

@@ -847,6 +847,49 @@ function openChartPage() {
   window.open(`/chart/${encodeURIComponent(selGroupId)}/${selTopicId}`, '_blank');
 }
 
+async function testChartSend() {
+  if (!selGroupId || selTopicId === null || selTopicId === undefined) return;
+  const btn = document.getElementById('btnTestChart');
+  const out = document.getElementById('chartDiagOut');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> در حال ارسال…'; }
+  out.innerHTML = '';
+  try {
+    const r = await fetch(
+      `/api/charts/${encodeURIComponent(selGroupId)}/${selTopicId}/test_send`,
+      { method: 'POST' }
+    );
+    const d = await r.json();
+    if (d.ok) {
+      out.innerHTML = `<span class="text-success">✓ چارت ارسال شد (msg_id=${d.message_id}, ${d.rates_count} نقطه)</span>`;
+      showToast('چارت تستی ارسال شد ✓', 'success');
+    } else {
+      const hint = d.hint ? `<br><code class="small">${esc(d.hint)}</code>` : '';
+      out.innerHTML = `<span class="text-danger">✗ ${esc(d.msg || 'خطا')} (${esc(d.stage || '')})</span>${hint}`;
+      showToast(d.msg || 'خطا در ارسال چارت', 'danger');
+    }
+  } catch (e) {
+    out.innerHTML = '<span class="text-danger">خطای شبکه</span>';
+  }
+  if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-send"></i> ارسال چارت آزمایشی'; }
+}
+
+async function checkChartStatus() {
+  const out = document.getElementById('chartDiagOut');
+  out.innerHTML = '<span class="text-muted">در حال بررسی…</span>';
+  try {
+    const d = await (await fetch('/api/charts/status')).json();
+    if (d.matplotlib_available) {
+      out.innerHTML = '<span class="text-success">✓ matplotlib در دسترس است</span>';
+    } else {
+      out.innerHTML = `<span class="text-danger">✗ matplotlib در دسترس نیست</span>
+        <br><small>${esc(d.error || '')}</small>
+        <br><code class="small">${esc(d.install_hint || '')}</code>`;
+    }
+  } catch {
+    out.innerHTML = '<span class="text-danger">خطای شبکه</span>';
+  }
+}
+
 function deleteSource(si) {
   ensureCfg().sources.splice(si, 1);
   renderTopicDetail();
@@ -955,6 +998,15 @@ function renderTopicDetail() {
           <div class="form-text small">
             <i class="bi bi-info-circle"></i>
             عبارت regex برای استخراج مقدار را در هر سورس جدا تنظیم کنید (پیام هر سورس فرمت خود را دارد).
+          </div>
+          <div class="d-flex gap-2 mt-2 flex-wrap align-items-center">
+            <button class="btn btn-sm btn-outline-secondary" onclick="checkChartStatus()">
+              <i class="bi bi-shield-check"></i> بررسی وضعیت چارت
+            </button>
+            <button class="btn btn-sm btn-outline-primary" id="btnTestChart" onclick="testChartSend()">
+              <i class="bi bi-send"></i> ارسال چارت آزمایشی
+            </button>
+            <span id="chartDiagOut" class="small flex-grow-1"></span>
           </div>
         </div>` : ''}
     </div>
