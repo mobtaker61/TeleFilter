@@ -931,7 +931,6 @@ def api_chart_test_send(group_id: str, topic_id: int):
 
     async def _send():
         target = await c.get_entity(int(g['telegram_id']))
-        old = fwd.get_last_chart_msg(uid, group_id, topic_id) if hasattr(fwd, 'get_last_chart_msg') else None
         from config_util import get_last_chart_msg as _glcm, save_last_chart_msg as _slcm
         old = _glcm(uid, group_id, topic_id)
         if old:
@@ -939,10 +938,11 @@ def api_chart_test_send(group_id: str, topic_id: int):
                 await c.delete_messages(target, [int(old)])
             except Exception:
                 pass
+        named = fwd._named_png(chart_label or f'topic_{topic_id}', png)
         kwargs = {'caption': f'📊 {chart_label} (test)', 'force_document': False}
         if is_forum and topic_id and topic_id > 0:
             kwargs['reply_to'] = int(topic_id)
-        sent = await c.send_file(target, file=png, **kwargs)
+        sent = await c.send_file(target, file=named, **kwargs)
         if sent and hasattr(sent, 'id'):
             _slcm(uid, group_id, topic_id, int(sent.id))
             return int(sent.id)

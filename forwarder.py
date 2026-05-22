@@ -8,8 +8,11 @@ In-process forwarder.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import random
+import re
+import time
 from typing import Any
 
 from telethon import events
@@ -162,6 +165,21 @@ def clear_routes(uid: int):
     _routes.pop(uid, None)
 
 
+_SAFE_NAME_RE = re.compile(r'[^A-Za-z0-9_\-]+')
+
+
+def _named_png(label: str, png_bytes: bytes) -> io.BytesIO:
+    """
+    PNG bytes را در یک BytesIO با اسم/پسوند مناسب می‌پیچد تا Telethon آن را
+    به‌عنوان عکس (photo) ارسال کند، نه document.
+    """
+    safe = _SAFE_NAME_RE.sub('_', label or 'chart').strip('_')[:40] or 'chart'
+    ts = time.strftime('%Y%m%d_%H%M%S')
+    buf = io.BytesIO(png_bytes)
+    buf.name = f"{safe}_{ts}.png"
+    return buf
+
+
 def _matches(text: str, filters: list) -> bool:
     if not filters:
         return True
@@ -227,10 +245,11 @@ async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
     last_str = f"{int(value):,}" if value == int(value) else f"{value:,.4f}".rstrip('0').rstrip('.')
     caption = f"📊 {route.get('chart_label') or ''}\nآخرین: {last_str}".strip()
     try:
+        named = _named_png(route.get('chart_label') or f'topic_{tid}', png)
         kwargs = {'caption': caption, 'force_document': False}
         if route.get('is_forum') and tid and tid > 0:
             kwargs['reply_to'] = int(tid)
-        sent = await client.send_file(target, file=png, **kwargs)
+        sent = await client.send_file(target, file=named, **kwargs)
         if sent and hasattr(sent, 'id'):
             save_last_chart_msg(uid, gid, tid, int(sent.id))
             logger.info("[%s] chart sent topic=%s msg=%s value=%s", uid, tid, sent.id, value)
