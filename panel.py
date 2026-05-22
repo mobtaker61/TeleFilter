@@ -6,12 +6,11 @@ import json
 import random
 import threading
 import asyncio
-import subprocess
-import sys
 import os
 import atexit
 import hashlib
 import hmac
+import logging
 import time
 import sqlite3
 import secrets
@@ -30,6 +29,7 @@ from config_util import (
     normalize_config, empty_config, find_group, new_group_id,
     config_stats, dashboard_stats, group_config_stats,
 )
+import forwarder as fwd
 
 try:
     from telethon.tl.functions.messages import GetForumTopicsRequest, CreateForumTopicRequest
@@ -64,7 +64,6 @@ except ImportError:
 # ══════════════════════════════════════════════════════════
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 MASTER_CFG_PATH = os.path.join(BASE_DIR, 'master_config.json')
-MAIN_SCRIPT     = os.path.join(BASE_DIR, 'main.py')
 USERS_DIR       = os.path.join(BASE_DIR, 'data', 'users')
 DB_PATH         = os.path.join(BASE_DIR, 'data', 'users.db')
 
@@ -190,8 +189,7 @@ def user_config_path(tg_id: int) -> str:
     return os.path.join(user_dir(tg_id), 'config.json')
 
 PANEL_SESSION = 'panel'
-FWD_SESSION   = 'fwd'
-LEGACY_SESSION = 'telefilter'
+LEGACY_SESSIONS = ('telefilter', 'fwd')
 
 def user_session_path(tg_id: int, kind: str = PANEL_SESSION) -> str:
     """مسیر پایه session (بدون پسوند) — Telethon خودش .session اضافه می‌کند."""
@@ -200,48 +198,23 @@ def user_session_path(tg_id: int, kind: str = PANEL_SESSION) -> str:
 def _session_file(uid: int, kind: str = PANEL_SESSION) -> str:
     return user_session_path(uid, kind) + '.session'
 
-def _copy_session_file(src: str, dst: str):
+def _migrate_legacy_session(uid: int):
+    """اگر فقط session قدیمی موجود است، آن را به panel.session منتقل می‌کند."""
     import shutil
-    shutil.copy2(src, dst)
-    for suffix in ('-journal', '-wal', '-shm'):
-        s = src + suffix
-        if os.path.exists(s):
-            shutil.copy2(s, dst + suffix)
-
-def _copy_session_kind(uid: int, src_kind: str, dst_kind: str):
-    src = _session_file(uid, src_kind)
-    if not os.path.exists(src):
-        return
-    _copy_session_file(src, _session_file(uid, dst_kind))
-
-def _migrate_sessions(uid: int):
-    """session قدیمی تکی را به panel+fwd جداگانه منتقل می‌کند."""
     panel = _session_file(uid, PANEL_SESSION)
     if os.path.exists(panel):
-        if not os.path.exists(_session_file(uid, FWD_SESSION)):
-            _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
         return
-    legacy = _session_file(uid, LEGACY_SESSION)
-    if os.path.exists(legacy):
-        _copy_session_file(legacy, panel)
-        _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
-        return
-    very_old = os.path.join(user_dir(uid), 'panel.session')
-    if os.path.exists(very_old):
-        _copy_session_file(very_old, panel)
-        _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
-
-def sync_fwd_session(uid: int):
-    """پس از لاگین پنل، session فوروارد را همگام می‌کند (دو فایل جدا: panel / fwd)."""
-    _migrate_sessions(uid)
-    if not session_on_disk(uid):
-        return
-    disconnect_tg_client(uid)
-    time.sleep(0.2)
-    _copy_session_kind(uid, PANEL_SESSION, FWD_SESSION)
+    for kind in LEGACY_SESSIONS:
+        legacy = _session_file(uid, kind)
+        if os.path.exists(legacy):
+            try:
+                shutil.copy2(legacy, panel)
+            except Exception:
+                pass
+            return
 
 def session_on_disk(uid: int) -> bool:
-    _migrate_sessions(uid)
+    _migrate_legacy_session(uid)
     return os.path.exists(_session_file(uid, PANEL_SESSION))
 
 def _apply_master_api(cfg: dict) -> dict:
@@ -319,165 +292,157 @@ def admin_required(f):
     return dec
 
 # ══════════════════════════════════════════════════════════
-#  Per-user Forwarder management
+#  Forwarder (in-process via forwarder.py)
 # ══════════════════════════════════════════════════════════
-_fwd_lock  = threading.Lock()
-_fwd_procs: dict[int, subprocess.Popen | None] = {}
-_fwd_logs:  dict[int, deque]                   = {}
+_fwd_logs: dict[int, deque] = {}
+_fwd_active: dict[int, bool] = {}
+
 
 def _logs(uid: int) -> deque:
     if uid not in _fwd_logs:
         _fwd_logs[uid] = deque(maxlen=300)
     return _fwd_logs[uid]
 
-def _log_reader(proc: subprocess.Popen, uid: int):
-    try:
-        for line in iter(proc.stdout.readline, ''):
-            _logs(uid).append(line.rstrip())
-    except Exception:
-        pass
 
-def _fwd_pid_path(uid: int) -> str:
-    return os.path.join(user_dir(uid), '.forwarder.pid')
+def _log_msg(uid: int, msg: str):
+    _logs(uid).append(f"{time.strftime('%H:%M:%S')} {msg}")
 
 
-def _fwd_running_global(uid: int) -> bool:
-    """آیا main.py این کاربر از هر workerای در حال اجراست؟"""
-    path = _fwd_pid_path(uid)
-    if not os.path.isfile(path):
-        return False
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            pid = int(f.read().strip())
-        os.kill(pid, 0)
-        return True
-    except (OSError, ValueError):
+class _PanelLogHandler(logging.Handler):
+    def emit(self, record):
         try:
-            os.remove(path)
-        except OSError:
-            pass
-        return False
-
-
-def _write_fwd_pid(uid: int, pid: int):
-    with open(_fwd_pid_path(uid), 'w', encoding='utf-8') as f:
-        f.write(str(pid))
-
-
-def _clear_fwd_pid(uid: int, expected_pid: int | None = None):
-    path = _fwd_pid_path(uid)
-    if not os.path.isfile(path):
-        return
-    if expected_pid is not None:
+            msg = self.format(record)
+        except Exception:
+            return
+        # محدود می‌کنیم به لاگ‌های مربوط به یک کاربر [uid]
+        import re
+        m = re.match(r'^\[(\d+)\]', record.getMessage())
+        if not m:
+            return
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                if int(f.read().strip()) != expected_pid:
-                    return
-        except (OSError, ValueError):
-            pass
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+            uid = int(m.group(1))
+        except ValueError:
+            return
+        _logs(uid).append(f"{time.strftime('%H:%M:%S')} {record.getMessage()}")
+
+
+_panel_log = logging.getLogger('telefilter.forwarder')
+_panel_log.setLevel(logging.INFO)
+_panel_log.addHandler(_PanelLogHandler())
 
 
 def fwd_status(uid: int) -> str:
-    p = _fwd_procs.get(uid)
-    if p is not None and p.poll() is None:
-        return 'running'
-    if _fwd_running_global(uid):
-        return 'running'
-    if p is not None and p.returncode not in (None, 0):
-        return f'crashed ({p.returncode})'
-    return 'stopped'
+    if not _fwd_active.get(uid):
+        return 'stopped'
+    return fwd.status(uid)
 
-
-def _stop_fwd(uid: int):
-    p = _fwd_procs.get(uid)
-    if p and p.poll() is None:
-        _logs(uid).append('— stopping forwarder —')
-        p.terminate()
-        try:
-            p.wait(timeout=6)
-        except subprocess.TimeoutExpired:
-            p.kill()
-        _clear_fwd_pid(uid, p.pid)
-    _fwd_procs[uid] = None
-
-
-def start_fwd(uid: int) -> bool:
-    """فوروارد را اجرا می‌کند؛ اگر session وجود نداشته باشد False برمی‌گرداند."""
-    if not session_on_disk(uid):
-        _logs(uid).append('— forwarder skipped: no Telegram session (login in panel) —')
-        return False
-    if _fwd_running_global(uid):
-        return True
-    with _fwd_lock:
-        if _fwd_running_global(uid):
-            return True
-        _stop_fwd(uid)
-        cfg = user_config_path(uid)
-        sync_fwd_session(uid)
-        sess = user_session_path(uid, FWD_SESSION)
-        _logs(uid).append('— starting forwarder —')
-        proc = subprocess.Popen(
-            [sys.executable, MAIN_SCRIPT, '--config', cfg, '--session', sess,
-             '--user-id', str(uid)],
-            cwd=BASE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding='utf-8', errors='replace', bufsize=1
-        )
-        _fwd_procs[uid] = proc
-        _write_fwd_pid(uid, proc.pid)
-        threading.Thread(target=_log_reader, args=(proc, uid), daemon=True).start()
-    return True
-
-def auto_start_fwd(uid: int):
-    """فوروارد خودکار پس از داشتن session و API (بدون نیاز به کلیک دستی)."""
-    user = db_get_user(uid)
-    if not user or not user['is_approved']:
-        return
-    if not session_on_disk(uid):
-        return
-    api_id, api_hash = user_api_credentials(uid)
-    if not api_id or not api_hash:
-        return
-    if fwd_status(uid) == 'running':
-        return
-    start_fwd(uid)
 
 def needs_telethon_login(uid: int) -> bool:
     return not session_on_disk(uid)
 
+
+def rebuild_forwarder(uid: int) -> bool:
+    """routes را از روی config می‌سازد و handler را نصب می‌کند."""
+    if not session_on_disk(uid):
+        _log_msg(uid, '— forwarder skipped: no session —')
+        return False
+    api_id, api_hash = user_api_credentials(uid)
+    if not api_id or not api_hash:
+        _log_msg(uid, '— forwarder skipped: master API not set —')
+        return False
+    c = ensure_client(uid)
+    if not c:
+        _log_msg(uid, '— forwarder skipped: client not connected —')
+        return False
+    cfg = load_user_config(uid)
+    try:
+        tg_run(fwd.rebuild_and_install(uid, c, cfg), timeout=60)
+        _fwd_active[uid] = True
+        st = fwd.stats(uid)
+        _log_msg(uid, f"routes built: {st['routes']} routes, {st['targets']} targets")
+        return True
+    except Exception as e:
+        _log_msg(uid, f"rebuild failed: {e}")
+        return False
+
+
+def stop_forwarder(uid: int):
+    c = _tg_clients.get(uid)
+    if c:
+        try:
+            fwd.uninstall_handler(uid, c)
+        except Exception:
+            pass
+    fwd.clear_routes(uid)
+    _fwd_active[uid] = False
+    _log_msg(uid, '— forwarder stopped —')
+
+
+def auto_start_fwd(uid: int):
+    """به‌صورت idempotent: routes را بازسازی و handler را نصب می‌کند."""
+    user = db_get_user(uid)
+    if not user or not user['is_approved']:
+        return
+    # اگر forwarder در حال اجراست، فقط مطمئن شو client وصل است
+    if _fwd_active.get(uid):
+        c = _tg_clients.get(uid)
+        if c is not None:
+            try:
+                if c.is_connected():
+                    return
+            except Exception:
+                pass
+    rebuild_forwarder(uid)
+
+
 def _auto_start_all():
-    """فقط فوروارد را بالا می‌آورد — بدون باز کردن panel.session (جلوگیری از database locked)."""
     for u in db_all_users():
         if u['is_approved']:
-            auto_start_fwd(u['tg_id'])
+            try:
+                auto_start_fwd(u['tg_id'])
+            except Exception as e:
+                print(f'[boot:{u["tg_id"]}] {e}')
+
 
 def _fwd_watchdog():
+    """هر ۳۰ ثانیه چک می‌کند client وصل است و handler نصب است؛ در غیر این‌صورت reconnect/reinstall."""
     while True:
-        time.sleep(25)
+        time.sleep(30)
         for u in db_all_users():
             if not u['is_approved']:
                 continue
             uid = u['tg_id']
             if not session_on_disk(uid):
                 continue
-            st = fwd_status(uid)
-            if st != 'running':
-                auto_start_fwd(uid)
+            try:
+                c = _tg_clients.get(uid)
+                connected = False
+                if c is not None:
+                    try:
+                        connected = bool(c.is_connected())
+                    except Exception:
+                        connected = False
+                if not connected or fwd.status(uid) == 'idle' or not _fwd_active.get(uid):
+                    auto_start_fwd(uid)
+            except Exception as e:
+                print(f'[watchdog:{uid}] {e}')
+
 
 threading.Thread(
-    target=lambda: (time.sleep(3), _auto_start_all()),
+    target=lambda: (time.sleep(4), _auto_start_all()),
     daemon=True, name='fwd-boot'
 ).start()
 threading.Thread(target=_fwd_watchdog, daemon=True, name='fwd-watchdog').start()
 
+
 def stop_fwd(uid: int):
-    with _fwd_lock: _stop_fwd(uid)
+    stop_forwarder(uid)
+
 
 def stop_all():
-    for uid in list(_fwd_procs): _stop_fwd(uid)
+    for uid in list(_fwd_active):
+        stop_forwarder(uid)
+
 
 atexit.register(stop_all)
 
@@ -501,9 +466,13 @@ def _make_client(uid: int) -> TelegramClient | None:
         return None
     old = _tg_clients.get(uid)
     if old:
+        try:
+            fwd.uninstall_handler(uid, old)
+        except Exception:
+            pass
         try: asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=5)
         except Exception: pass
-    _migrate_sessions(uid)
+    _migrate_legacy_session(uid)
     client = TelegramClient(user_session_path(uid, PANEL_SESSION), int(api_id), api_hash, loop=_tg_loop)
     _tg_clients[uid]   = client
     _tg_connected[uid] = False
@@ -534,6 +503,15 @@ async def _connect(uid: int):
         _tg_connected[uid] = ok
         if ok:
             _tg_auth[uid]['phase'] = 'done'
+            if not _fwd_active.get(uid):
+                try:
+                    cfg = load_user_config(uid)
+                    await fwd.rebuild_and_install(uid, c, cfg)
+                    _fwd_active[uid] = True
+                    _log_msg(uid, f"forwarder online ({fwd.stats(uid)['routes']} routes)")
+                except Exception as e:
+                    _log_msg(uid, f"forwarder install failed: {e}")
+                    print(f'[TG:{uid}] forwarder install: {e}')
     except Exception as e:
         _tg_connected[uid] = False
         print(f'[TG:{uid}] {e}')
@@ -551,14 +529,18 @@ async def _telegram_ready_async(uid: int) -> bool:
     return _tg_connected.get(uid, False)
 
 def disconnect_tg_client(uid: int):
-    """اتصال Telethon پنل را قطع می‌کند تا fwd.session قفل نشود."""
     old = _tg_clients.pop(uid, None)
     if old:
+        try:
+            fwd.uninstall_handler(uid, old)
+        except Exception:
+            pass
         try:
             asyncio.run_coroutine_threadsafe(old.disconnect(), _tg_loop).result(timeout=8)
         except Exception:
             pass
     _tg_connected[uid] = False
+    _fwd_active[uid] = False
 
 
 def reset_tg_client(uid: int) -> TelegramClient | None:
@@ -690,9 +672,14 @@ def update_config():
     uid  = cur_uid()
     data = request.get_json()
     save_user_config(uid, data)
-    sync_fwd_session(uid)
-    auto_start_fwd(uid)
-    return jsonify({'ok': True, 'restarted': True})
+    # rebuild حتماً (حتی اگر فعال است) — چون sources عوض شده‌اند
+    rebuild_forwarder(uid)
+    return jsonify({
+        'ok': True,
+        'restarted': True,
+        'status': fwd_status(uid),
+        **fwd.stats(uid),
+    })
 
 @app.route('/api/status')
 @login_required
@@ -725,36 +712,76 @@ def get_status():
 @login_required
 def fwd_start():
     uid = cur_uid()
-    start_fwd(uid)
-    return jsonify({'ok': True, 'status': fwd_status(uid)})
+    rebuild_forwarder(uid)
+    return jsonify({'ok': True, 'status': fwd_status(uid), **fwd.stats(uid)})
 
 @app.route('/api/forwarder/stop', methods=['POST'])
 @login_required
 def fwd_stop():
     uid = cur_uid()
-    stop_fwd(uid)
+    stop_forwarder(uid)
     return jsonify({'ok': True, 'status': fwd_status(uid)})
 
 @app.route('/api/forwarder/restart', methods=['POST'])
 @login_required
 def fwd_restart():
     uid = cur_uid()
-    start_fwd(uid)
-    return jsonify({'ok': True, 'status': fwd_status(uid)})
+    rebuild_forwarder(uid)
+    return jsonify({'ok': True, 'status': fwd_status(uid), **fwd.stats(uid)})
 
 @app.route('/api/forwarder/logs')
 @login_required
 def fwd_logs():
     uid = cur_uid()
     n   = int(request.args.get('n', 80))
-    return jsonify({'logs': list(_logs(uid))[-n:]})
+    return jsonify({
+        'logs': list(_logs(uid))[-n:],
+        'status': fwd_status(uid),
+        **fwd.stats(uid),
+    })
+
+@app.route('/api/forwarder/diag')
+@login_required
+def fwd_diag():
+    """تشخیص لحظه‌ای: routes، اتصال، وضعیت — برای دیباگ کاربر."""
+    uid = cur_uid()
+    c = _tg_clients.get(uid)
+    connected = False
+    if c is not None:
+        try:
+            connected = bool(c.is_connected())
+        except Exception:
+            connected = False
+    data = fwd._routes.get(uid) or {'source_map': {}, 'targets': {}, 'forum': {}}
+    sources = []
+    for peer_id, entries in data['source_map'].items():
+        for gid, tid, filt, is_forum in entries:
+            sources.append({
+                'peer_id': peer_id,
+                'group_id': gid,
+                'topic_id': tid if is_forum else None,
+                'filters': filt,
+            })
+    targets = [
+        {'group_id': gid, 'title': getattr(ent, 'title', '') or getattr(ent, 'first_name', '') or str(gid)}
+        for gid, ent in data['targets'].items()
+    ]
+    return jsonify({
+        'uid': uid,
+        'session_on_disk': session_on_disk(uid),
+        'client_connected': connected,
+        'forwarder_active': bool(_fwd_active.get(uid)),
+        'status': fwd_status(uid),
+        'stats': fwd.stats(uid),
+        'sources': sources,
+        'targets': targets,
+    })
 
 # ══════════════════════════════════════════════════════════
 #  Routes — API: Auth (Telegram login from panel)
 # ══════════════════════════════════════════════════════════
 def _finish_telethon_login(uid: int):
     initialize_user_config(uid)
-    sync_fwd_session(uid)
     reset_tg_client(uid)
     auto_start_fwd(uid)
 
