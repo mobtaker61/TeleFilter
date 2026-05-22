@@ -40,8 +40,13 @@ function buildCfgMapFromGroups(grps) {
       const sources = (t.sources || []).map(s => ({
         chat: s.chat || '',
         filters: normalizeFilters(s.filters),
+        value_regex: s.value_regex || '',
       }));
-      m[cfgKey(g.id, t.topic_id)] = { sources };
+      m[cfgKey(g.id, t.topic_id)] = {
+        sources,
+        chart_enabled: !!t.chart_enabled,
+        chart_label: t.chart_label || '',
+      };
     }
   }
   return m;
@@ -60,7 +65,9 @@ function groupIsForum(g) {
 
 function ensureCfg() {
   const k = cfgKey(selGroupId, selTopicId);
-  if (!cfgMap[k]) cfgMap[k] = { sources: [] };
+  if (!cfgMap[k]) cfgMap[k] = { sources: [], chart_enabled: false, chart_label: '' };
+  if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
+  if (cfgMap[k].chart_label === undefined) cfgMap[k].chart_label = '';
   return cfgMap[k];
 }
 
@@ -790,9 +797,54 @@ function syncTopics() {
 
 // ── Sources & filters (topic detail) ────────────────────
 function addSource() {
-  ensureCfg().sources.push({ chat: '', filters: [] });
+  ensureCfg().sources.push({ chat: '', filters: [], value_regex: '' });
   renderTopicDetail();
   markDirty();
+}
+
+function updateSourceRegex(si, val) {
+  ensureCfg().sources[si].value_regex = val;
+  markDirty();
+}
+
+function toggleChartEnabled(val) {
+  ensureCfg().chart_enabled = !!val;
+  renderTopicDetail();
+  markDirty();
+}
+
+function updateChartLabel(val) {
+  ensureCfg().chart_label = val;
+  markDirty();
+}
+
+async function testSourceRegex(si) {
+  const src = ensureCfg().sources[si];
+  const sampleEl = document.getElementById(`regex_sample_${si}`);
+  const outEl = document.getElementById(`regex_out_${si}`);
+  const text = (sampleEl?.value || '').trim();
+  if (!text) {
+    outEl.innerHTML = '<span class="text-warning">متن نمونه را وارد کنید</span>';
+    return;
+  }
+  try {
+    const d = await (await fetch('/api/parse_value/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, regex: src.value_regex || '' }),
+    })).json();
+    if (d.ok) {
+      outEl.innerHTML = `<span class="text-success">✓ مقدار استخراج‌شده: <b>${d.value}</b>${d.raw ? ` <small class="text-muted">(${esc(d.raw)})</small>` : ''}</span>`;
+    } else {
+      outEl.innerHTML = `<span class="text-danger">✗ ${esc(d.msg || 'استخراج ناموفق')}</span>`;
+    }
+  } catch {
+    outEl.innerHTML = '<span class="text-danger">خطای شبکه</span>';
+  }
+}
+
+function openChartPage() {
+  if (!selGroupId || selTopicId === null || selTopicId === undefined) return;
+  window.open(`/chart/${encodeURIComponent(selGroupId)}/${selTopicId}`, '_blank');
 }
 
 function deleteSource(si) {
@@ -868,7 +920,9 @@ function renderTopicDetail() {
   const topics = tgTopicsByGroup[selGroupId] || [];
   const tgt = topics.find(t => t.id === selTopicId);
   const title = tgt ? tgt.title : `Topic ${selTopicId}`;
-  const sources = ensureCfg().sources;
+  const cfg = ensureCfg();
+  const sources = cfg.sources;
+  const chartOn = !!cfg.chart_enabled;
 
   detail.innerHTML = `
     <div class="topic-hdr">
@@ -880,6 +934,31 @@ function renderTopicDetail() {
       <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" onclick="selectGroup('${selGroupId}')">
         <i class="bi bi-people me-1"></i>پروفایل گروه</button>
     </div>
+
+    <div class="chart-section">
+      <div class="chart-toggle">
+        <label class="form-check form-switch m-0">
+          <input class="form-check-input" type="checkbox" id="chartEnabled" ${chartOn ? 'checked' : ''}
+                 onchange="toggleChartEnabled(this.checked)">
+          <span class="form-check-label fw-bold">
+            <i class="bi bi-graph-up-arrow text-primary me-1"></i> نمودار نرخ این تاپیک
+          </span>
+        </label>
+        ${chartOn ? `<button class="btn btn-sm btn-outline-primary" onclick="openChartPage()">
+          <i class="bi bi-bar-chart-line me-1"></i>نمایش نمودار</button>` : ''}
+      </div>
+      ${chartOn ? `
+        <div class="chart-fields">
+          <label class="small text-muted mb-1">برچسب نمودار (نام واحد یا نرخ)</label>
+          <input class="form-control form-control-sm" value="${esc(cfg.chart_label || '')}"
+                 oninput="updateChartLabel(this.value)" placeholder="مثلاً: دلار به افغانی">
+          <div class="form-text small">
+            <i class="bi bi-info-circle"></i>
+            عبارت regex برای استخراج مقدار را در هر سورس جدا تنظیم کنید (پیام هر سورس فرمت خود را دارد).
+          </div>
+        </div>` : ''}
+    </div>
+
     <div class="sec-head">
       <h6><i class="bi bi-broadcast-pin"></i> سورس‌ها</h6>
       <button class="btn btn-sm btn-outline-primary" onclick="addSource()"><i class="bi bi-plus-lg me-1"></i>سورس</button>
@@ -890,11 +969,33 @@ function renderTopicDetail() {
           <i class="bi bi-telegram"></i>
           <input type="text" dir="ltr" value="${esc(src.chat || '')}" onchange="updateChat(${si},this.value)" placeholder="@channel">
           <button class="src-del" onclick="deleteSource(${si})"><i class="bi bi-x-circle-fill"></i></button>
-        </div>${renderFilterRules(si, src.filters || [])}</div>`).join('')
+        </div>
+        ${renderFilterRules(si, src.filters || [])}
+        ${chartOn ? `
+          <div class="src-regex">
+            <label class="small text-muted mb-1">
+              <i class="bi bi-regex me-1"></i> Regex استخراج عدد (این سورس):
+            </label>
+            <input class="form-control form-control-sm" dir="ltr"
+                   value="${esc(src.value_regex || '')}"
+                   oninput="updateSourceRegex(${si}, this.value)"
+                   placeholder="مثلاً: ([\\d,\\.]+)">
+            <div class="regex-test mt-2">
+              <textarea id="regex_sample_${si}" class="form-control form-control-sm" rows="2"
+                        placeholder="یک نمونه پیام از این سورس را اینجا بچسبانید برای تست…"></textarea>
+              <div class="d-flex align-items-center gap-2 mt-1">
+                <button class="btn btn-sm btn-outline-secondary" onclick="testSourceRegex(${si})">
+                  <i class="bi bi-play-fill"></i> تست
+                </button>
+                <span id="regex_out_${si}" class="small"></span>
+              </div>
+            </div>
+          </div>` : ''}
+      </div>`).join('')
       : '<div class="no-sources"><i class="bi bi-inbox"></i>سورسی نیست</div>'}
     <button class="btn-add-src mt-2" onclick="addSource()"><i class="bi bi-plus-circle"></i> سورس جدید</button>
     <p class="text-warning mt-3 mb-0" style="font-size:.78rem"><i class="bi bi-exclamation-triangle me-1"></i>
-      پس از افزودن سورس‌ها حتماً <strong>ذخیره تغییرات</strong> را بزنید تا فوروارد فعال شود.</p>`;
+      پس از تغییرات حتماً <strong>ذخیره تغییرات</strong> را بزنید تا فوروارد و نمودار به‌روز شوند.</p>`;
 }
 
 function goHome() {
@@ -947,6 +1048,17 @@ async function removeGroupMember(gid, memberId) {
 }
 
 async function saveAll() {
+  const buildTopic = (topic_id, name, data) => ({
+    topic_id,
+    name,
+    chart_enabled: !!data.chart_enabled,
+    chart_label: data.chart_label || '',
+    sources: (data.sources || []).map(s => ({
+      chat: s.chat || '',
+      filters: s.filters || [],
+      value_regex: s.value_regex || '',
+    })),
+  });
   const outGroups = groups.map(g => {
     const topics = [];
     let tlist = tgTopicsByGroup[g.id] || [];
@@ -956,14 +1068,14 @@ async function saveAll() {
     for (const t of tlist) {
       const data = cfgMap[cfgKey(g.id, t.id)];
       if (data?.sources?.length) {
-        topics.push({ topic_id: t.id, name: t.title, sources: data.sources });
+        topics.push(buildTopic(t.id, t.title, data));
       }
     }
     for (const [k, data] of Object.entries(cfgMap)) {
       if (!k.startsWith(g.id + ':') || !data.sources?.length) continue;
       const tid = parseInt(k.split(':')[1], 10);
       if (topics.some(x => x.topic_id === tid)) continue;
-      topics.push({ topic_id: tid, name: '', sources: data.sources });
+      topics.push(buildTopic(tid, '', data));
     }
     const row = { id: g.id, title: g.title, telegram_id: g.telegram_id, origin: g.origin, topics };
     if (g.is_forum !== undefined) row.is_forum = g.is_forum;

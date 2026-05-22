@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>نمودار تغییرات — TeleFilter</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.rtl.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { font-family:'Vazirmatn',sans-serif; box-sizing:border-box; }
+    body { background:#f1f5f9; color:#0f172a; min-height:100vh; padding:2rem 1rem; }
+    .card { background:#fff; border-radius:18px; box-shadow:0 12px 35px rgba(15,23,42,.08);
+      padding:1.5rem 1.75rem; max-width:1000px; margin:0 auto; }
+    .hdr { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;
+      margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid #e2e8f0; }
+    .title { font-weight:700; font-size:1.15rem; color:#1e293b; }
+    .sub { font-size:.78rem; color:#64748b; margin-top:.2rem; }
+    .latest { background:#eff6ff; border-radius:14px; padding:.85rem 1.2rem; text-align:center;
+      min-width:170px; }
+    .latest .v { font-weight:700; font-size:1.6rem; color:#1e40af; line-height:1.1; }
+    .latest .t { font-size:.7rem; color:#64748b; margin-top:.25rem; }
+    .range-bar { display:flex; gap:.4rem; margin:1rem 0; flex-wrap:wrap; }
+    .range-btn { border:1px solid #cbd5e1; background:#fff; color:#475569; border-radius:10px;
+      padding:.35rem .9rem; font-size:.8rem; cursor:pointer; transition:.15s; }
+    .range-btn:hover { border-color:#94a3b8; }
+    .range-btn.active { background:#1e40af; color:#fff; border-color:#1e40af; }
+    .chart-wrap { position:relative; height:360px; margin-bottom:1rem; }
+    table { width:100%; font-size:.82rem; }
+    th { background:#f8fafc; padding:.5rem .75rem; text-align:right; font-weight:600; color:#475569;
+      font-size:.75rem; border-bottom:1px solid #e2e8f0; }
+    td { padding:.5rem .75rem; border-bottom:1px solid #f1f5f9; }
+    tbody tr:hover { background:#f8fafc; }
+    .empty { text-align:center; padding:3rem 1rem; color:#94a3b8; }
+    .empty i { font-size:2.5rem; display:block; margin-bottom:.7rem; }
+    .back { color:#475569; text-decoration:none; font-size:.85rem; }
+    .back:hover { color:#1e40af; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="hdr">
+    <div>
+      <a href="/" class="back"><i class="bi bi-arrow-right"></i> بازگشت به پنل</a>
+      <div class="title mt-2" id="title">در حال بارگذاری…</div>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="latest">
+      <div class="v" id="latestVal">—</div>
+      <div class="t" id="latestTime">آخرین مقدار</div>
+    </div>
+  </div>
+
+  <div class="range-bar" id="rangeBar">
+    <button class="range-btn" data-h="24">۲۴ ساعت</button>
+    <button class="range-btn active" data-h="168">۷ روز</button>
+    <button class="range-btn" data-h="720">۳۰ روز</button>
+    <button class="range-btn" data-h="2160">۹۰ روز</button>
+  </div>
+
+  <div class="chart-wrap"><canvas id="chartCanvas"></canvas></div>
+
+  <h6 style="font-weight:600;color:#334155;margin-top:1.4rem">آخرین ۲۰ ثبت</h6>
+  <div id="tableBox">
+    <table>
+      <thead><tr><th>زمان</th><th>مقدار</th><th>متن خام</th></tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script>
+const groupId = {{ group_id|tojson }};
+const topicId = {{ topic_id|tojson }};
+let chart = null;
+let currentHours = 168;
+
+function fmtNum(n) {
+  if (n == null) return '—';
+  if (Number.isInteger(n)) return n.toLocaleString('en-US');
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: 4 });
+}
+
+function fmtDt(s) {
+  if (!s) return '';
+  const d = new Date(s.replace(' ', 'T') + 'Z');
+  return d.toLocaleString('fa-IR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' });
+}
+
+async function load() {
+  const r = await fetch(`/api/charts/${groupId}/${topicId}/data?hours=${currentHours}`);
+  const d = await r.json();
+  if (!d.ok) {
+    document.getElementById('title').textContent = 'خطا در بارگذاری';
+    return;
+  }
+  document.getElementById('title').textContent = (d.chart_label || d.topic_name || `Topic ${topicId}`);
+  document.getElementById('subtitle').textContent = `${d.group_title || ''} · ${d.count} نقطه`;
+  if (d.latest) {
+    document.getElementById('latestVal').textContent = fmtNum(d.latest.value);
+    document.getElementById('latestTime').textContent = fmtDt(d.latest.created_at);
+  } else {
+    document.getElementById('latestVal').textContent = '—';
+    document.getElementById('latestTime').textContent = 'هنوز داده‌ای نیست';
+  }
+  renderChart(d.rates, d.chart_label || d.topic_name || '');
+  renderTable(d.rates);
+}
+
+function renderChart(rates, label) {
+  const ctx = document.getElementById('chartCanvas');
+  const data = rates.map(r => ({ x: new Date(r.created_at.replace(' ', 'T') + 'Z'), y: r.value }));
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      datasets: [{
+        label: label || 'نرخ',
+        data,
+        borderColor: '#1e40af',
+        backgroundColor: 'rgba(30,64,175,.08)',
+        borderWidth: 2.4,
+        pointRadius: 3,
+        pointBackgroundColor: '#fff',
+        pointBorderColor: '#1e40af',
+        pointBorderWidth: 1.6,
+        tension: .25,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => fmtNum(ctx.parsed.y),
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'time',
+          time: { tooltipFormat: 'yyyy/MM/dd HH:mm' },
+          grid: { color: 'rgba(0,0,0,.04)' },
+          ticks: { font: { family: 'Vazirmatn' } },
+        },
+        y: {
+          grid: { color: 'rgba(0,0,0,.06)' },
+          ticks: {
+            font: { family: 'Vazirmatn' },
+            callback: v => fmtNum(v),
+          },
+        },
+      },
+    },
+  });
+}
+
+function renderTable(rates) {
+  const body = document.getElementById('tableBody');
+  const last = rates.slice(-20).reverse();
+  if (!last.length) {
+    body.innerHTML = '<tr><td colspan="3" class="empty"><i class="bi bi-inbox"></i>هنوز داده‌ای ثبت نشده</td></tr>';
+    return;
+  }
+  body.innerHTML = last.map(r => `
+    <tr>
+      <td style="white-space:nowrap">${fmtDt(r.created_at)}</td>
+      <td style="font-weight:600;color:#1e40af">${fmtNum(r.value)}</td>
+      <td style="color:#64748b;font-size:.78rem">${(r.raw_text || '').slice(0,80)}</td>
+    </tr>`).join('');
+}
+
+document.querySelectorAll('.range-btn').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('.range-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    currentHours = parseInt(b.dataset.h, 10);
+    load();
+  };
+});
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@ from telethon.utils import get_peer_id
 from config_util import (
     normalize_config, empty_config, find_group, new_group_id,
     config_stats, dashboard_stats, group_config_stats,
+    parse_value, get_rates, latest_rate,
 )
 import forwarder as fwd
 
@@ -739,6 +740,57 @@ def fwd_logs():
         'status': fwd_status(uid),
         **fwd.stats(uid),
     })
+
+@app.route('/api/parse_value/test', methods=['POST'])
+@login_required
+def api_parse_value_test():
+    """تست regex استخراج عدد روی متن نمونه."""
+    data = request.get_json() or {}
+    text = data.get('text', '') or ''
+    regex = data.get('regex', '') or ''
+    value, raw = parse_value(text, regex or None)
+    if value is None:
+        return jsonify({'ok': False, 'msg': 'عددی استخراج نشد'})
+    return jsonify({'ok': True, 'value': value, 'raw': raw})
+
+
+@app.route('/api/charts/<group_id>/<int:topic_id>/data')
+@login_required
+def api_chart_data(group_id: str, topic_id: int):
+    """تاریخچهٔ نرخ‌ها برای نمودار interactive در پنل."""
+    uid = cur_uid()
+    hours = int(request.args.get('hours', 168))   # پیش‌فرض ۷ روز
+    hours = max(1, min(hours, 24 * 90))           # سقف ۹۰ روز
+    rates = get_rates(uid, group_id, topic_id, since_hours=hours)
+    cfg = load_user_config(uid)
+    g = find_group(cfg, group_id) or {}
+    topic_name = ''
+    chart_label = ''
+    for t in g.get('topics') or []:
+        if int(t.get('topic_id') or 0) == int(topic_id):
+            topic_name = t.get('name', '') or ''
+            chart_label = t.get('chart_label', '') or ''
+            break
+    last = latest_rate(uid, group_id, topic_id)
+    return jsonify({
+        'ok': True,
+        'group_id': group_id,
+        'topic_id': topic_id,
+        'topic_name': topic_name,
+        'chart_label': chart_label,
+        'group_title': g.get('title', ''),
+        'rates': rates,
+        'latest': last,
+        'count': len(rates),
+        'hours': hours,
+    })
+
+
+@app.route('/chart/<group_id>/<int:topic_id>')
+@login_required
+def chart_page(group_id: str, topic_id: int):
+    return render_template('chart.html', group_id=group_id, topic_id=topic_id)
+
 
 @app.route('/api/forwarder/diag')
 @login_required

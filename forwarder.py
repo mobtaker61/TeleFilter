@@ -16,7 +16,12 @@ from telethon import events
 from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.utils import get_peer_id
 
-from config_util import normalize_config, record_forward
+from config_util import (
+    normalize_config, record_forward,
+    parse_value, record_rate, get_rates,
+    get_last_chart_msg, save_last_chart_msg,
+)
+from charts import render_rate_chart
 
 logger = logging.getLogger('telefilter.forwarder')
 
@@ -104,11 +109,15 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                 tid = int(tid_raw)
             except (TypeError, ValueError):
                 continue
+            chart_enabled = bool(t.get('chart_enabled', False))
+            chart_label = str(t.get('chart_label') or t.get('name') or '')
             for s in t.get('sources') or []:
-                chat = (s.get('chat') or '').strip() if isinstance(s.get('chat'), str) else s.get('chat')
+                raw_chat = s.get('chat')
+                chat = raw_chat.strip() if isinstance(raw_chat, str) else raw_chat
                 if not chat:
                     continue
                 filters = s.get('filters') or []
+                value_regex = str(s.get('value_regex') or '')
                 try:
                     cv = chat
                     try:
@@ -116,10 +125,17 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                     except (TypeError, ValueError):
                         pass
                     src_ent = await _resolve(client, cv)
+                    route = {
+                        'gid': gid,
+                        'topic_id': tid,
+                        'filters': filters,
+                        'is_forum': bool(is_forum),
+                        'chart_enabled': chart_enabled,
+                        'chart_label': chart_label,
+                        'value_regex': value_regex,
+                    }
                     for k in _peer_keys(src_ent):
-                        source_map.setdefault(k, []).append(
-                            (gid, tid, filters, bool(is_forum))
-                        )
+                        source_map.setdefault(k, []).append(route)
                 except Exception as e:
                     logger.warning("[%s] source %r resolve failed: %s", uid, chat, e)
 
@@ -148,6 +164,53 @@ def _matches(text: str, filters: list) -> bool:
     return False
 
 
+async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
+    """
+    اگر برای این سورس chart فعال است:
+      1) عدد را با regex استخراج کن
+      2) در DB ذخیره کن
+      3) نمودار را رندر و ارسال کن، نمودار قبلی را حذف کن
+    """
+    gid = route['gid']
+    tid = route['topic_id']
+    value_regex = route.get('value_regex') or None
+    value, raw_match = parse_value(raw_text, value_regex)
+    if value is None:
+        logger.warning("[%s] chart: parse failed for topic=%s (regex=%r)", uid, tid, value_regex)
+        return
+    record_rate(uid, gid, tid, value, raw_match or '', None)
+    try:
+        rates = get_rates(uid, gid, tid, since_hours=24 * 7)
+        png = render_rate_chart(
+            rates,
+            title=route.get('chart_label') or f"نمودار Topic {tid}",
+            y_label=route.get('chart_label') or '',
+        )
+    except Exception as e:
+        logger.error("[%s] chart render failed: %s", uid, e)
+        return
+
+    old_msg = get_last_chart_msg(uid, gid, tid)
+    if old_msg:
+        try:
+            await client.delete_messages(target, [int(old_msg)])
+        except Exception as e:
+            logger.debug("[%s] delete old chart msg failed: %s", uid, e)
+
+    last_str = f"{int(value):,}" if value == int(value) else f"{value:,.4f}".rstrip('0').rstrip('.')
+    caption = f"📊 {route.get('chart_label') or ''}\nآخرین: {last_str}".strip()
+    try:
+        kwargs = {'caption': caption, 'force_document': False}
+        if route.get('is_forum') and tid and tid > 0:
+            kwargs['reply_to'] = int(tid)
+        sent = await client.send_file(target, file=png, **kwargs)
+        if sent and hasattr(sent, 'id'):
+            save_last_chart_msg(uid, gid, tid, int(sent.id))
+            logger.info("[%s] chart sent topic=%s msg=%s value=%s", uid, tid, sent.id, value)
+    except Exception as e:
+        logger.error("[%s] chart send failed: %s", uid, e)
+
+
 def install_handler(uid: int, client):
     """نصب یا جایگزینی NewMessage handler برای کاربر."""
     old = _handlers.get(uid)
@@ -167,7 +230,6 @@ def install_handler(uid: int, client):
         if not source_map:
             return
 
-        # تطبیق دقیق با چندین کلید (id خام، -id، -100... )
         try:
             chat = await event.get_chat()
             peer_id = int(get_peer_id(chat))
@@ -183,11 +245,15 @@ def install_handler(uid: int, client):
         if not entries:
             return
 
-        text = (event.message.text or event.message.message or '').lower()
+        raw_text = (event.message.text or event.message.message or '')
+        text_lower = raw_text.lower()
 
-        for gid, tid, filt, use_topic in entries:
-            if not _matches(text, filt):
+        for route in entries:
+            if not _matches(text_lower, route.get('filters') or []):
                 continue
+            gid = route['gid']
+            tid = route['topic_id']
+            use_topic = route.get('is_forum') and tid > 0
             target = targets.get(gid)
             if not target:
                 logger.warning("[%s] no target for group=%s", uid, gid)
@@ -199,7 +265,7 @@ def install_handler(uid: int, client):
                     'to_peer': target,
                     'random_id': [random.randint(1, 2**63 - 1)],
                 }
-                if use_topic and tid > 0:
+                if use_topic:
                     kwargs['top_msg_id'] = tid
                 await client(ForwardMessagesRequest(**kwargs))
                 record_forward(uid, gid, tid if use_topic else 0, peer_id)
@@ -211,6 +277,13 @@ def install_handler(uid: int, client):
                 err = f"forward fail (chat={peer_id} group={gid} topic={tid}): {e}"
                 _last_error[uid] = err
                 logger.error("[%s] %s", uid, err)
+                continue
+
+            if route.get('chart_enabled') and raw_text:
+                try:
+                    await _process_chart(uid, client, route, target, raw_text)
+                except Exception as e:
+                    logger.error("[%s] chart pipeline failed: %s", uid, e)
 
     client.add_event_handler(_handler, events.NewMessage(incoming=True))
     _handlers[uid] = _handler

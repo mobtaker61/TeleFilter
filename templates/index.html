@@ -178,6 +178,18 @@
       cursor: pointer; width: 100%; transition: all .15s; display: flex; align-items: center; justify-content: center; gap: .4rem; }
     .btn-add-src:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
 
+    /* Chart configuration in topic detail */
+    .chart-section { background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+      border: 1.5px solid #bfdbfe; border-radius: 14px; padding: 1rem 1.1rem;
+      margin: .8rem 0 1.2rem; }
+    .chart-toggle { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    .chart-fields { margin-top: .9rem; padding-top: .9rem; border-top: 1px dashed #bfdbfe; }
+    .src-regex { margin-top: .8rem; padding-top: .8rem; border-top: 1px dashed #e2e8f0; }
+    .src-regex input, .src-regex textarea { font-family: 'JetBrains Mono', 'Vazirmatn', monospace;
+      font-size: .82rem; }
+    .src-regex label { font-weight: 500; }
+    .regex-test textarea { resize: vertical; min-height: 38px; }
+
     /* ── Modals ───────────────────────────────── */
     .modal-content { border-radius: 16px; border: none; box-shadow: 0 20px 60px rgba(0,0,0,.15); }
     .modal-header  { border-bottom: 1px solid #f1f5f9; padding: 1.1rem 1.4rem; }

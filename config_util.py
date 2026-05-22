@@ -1,6 +1,7 @@
-"""Normalize user config, migrate legacy format, forward stats."""
+"""Normalize user config, migrate legacy format, forward stats, rate history."""
 import json
 import os
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
@@ -50,14 +51,31 @@ def _norm_group(g: dict) -> dict:
         'title': g.get('title') or 'گروه',
         'telegram_id': str(g.get('telegram_id', '')),
         'origin': g.get('origin', 'linked'),
-        'topics': g.get('topics') or [],
+        'topics': [_norm_topic(t) for t in (g.get('topics') or [])],
     }
     if 'is_forum' in g:
         out['is_forum'] = bool(g['is_forum'])
     else:
-        # گروه‌های قدیمی بدون فیلد: اگر topic_id>0 دارند، Forum است
         out['is_forum'] = any(int(t.get('topic_id') or 0) > 0 for t in (g.get('topics') or []))
     return out
+
+
+def _norm_topic(t: dict) -> dict:
+    return {
+        'topic_id': t.get('topic_id'),
+        'name': t.get('name', ''),
+        'chart_enabled': bool(t.get('chart_enabled', False)),
+        'chart_label': str(t.get('chart_label', '') or ''),
+        'sources': [_norm_source(s) for s in (t.get('sources') or [])],
+    }
+
+
+def _norm_source(s: dict) -> dict:
+    return {
+        'chat': s.get('chat', ''),
+        'filters': s.get('filters', []),
+        'value_regex': str(s.get('value_regex', '') or ''),
+    }
 
 
 def find_group(cfg: dict, group_id: str) -> dict | None:
@@ -103,10 +121,152 @@ def _init_stats_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_fwd_user_time ON forward_log(user_id, created_at)')
+
+        c.execute('''CREATE TABLE IF NOT EXISTS rate_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            group_id TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            value REAL NOT NULL,
+            raw_text TEXT,
+            source_peer INTEGER,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_rate_topic ON rate_history(user_id, group_id, topic_id, created_at)')
+
+        c.execute('''CREATE TABLE IF NOT EXISTS chart_message (
+            user_id INTEGER NOT NULL,
+            group_id TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, group_id, topic_id)
+        )''')
         c.commit()
 
 
 _init_stats_db()
+
+
+# ══════════════════════════════════════════════════════════
+#  Value parsing (price/rate extraction from message text)
+# ══════════════════════════════════════════════════════════
+PERSIAN_DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
+
+
+def normalize_digits(s: str) -> str:
+    """تبدیل ارقام فارسی/عربی به انگلیسی."""
+    return (s or '').translate(PERSIAN_DIGITS)
+
+
+def parse_value(text: str, regex: str | None = None) -> tuple[float | None, str | None]:
+    """
+    استخراج عدد از متن.
+    اگر regex داده شود، گروه اول match یا خود match استفاده می‌شود.
+    اگر regex خالی باشد، یک heuristic ساده: اولین عدد طولانی >= 2 رقم.
+    خروجی: (value, raw_string) یا (None, None).
+    """
+    if not text:
+        return None, None
+    text = normalize_digits(text)
+    match = None
+    if regex:
+        try:
+            match = re.search(regex, text, re.MULTILINE)
+        except re.error:
+            return None, None
+        if not match:
+            return None, None
+        raw = match.group(1) if match.groups() else match.group(0)
+    else:
+        m = re.search(r'\d[\d,،.\s]{1,15}\d', text)
+        if not m:
+            return None, None
+        raw = m.group(0)
+    cleaned = re.sub(r'[,،\s]', '', raw).strip().strip('.')
+    if not cleaned:
+        return None, None
+    try:
+        return float(cleaned), raw.strip()
+    except ValueError:
+        return None, None
+
+
+# ══════════════════════════════════════════════════════════
+#  Rate history
+# ══════════════════════════════════════════════════════════
+def record_rate(user_id: int, group_id: str, topic_id: int, value: float,
+                raw_text: str = '', source_peer: int | None = None):
+    if not user_id:
+        return
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            'INSERT INTO rate_history (user_id, group_id, topic_id, value, raw_text, source_peer)'
+            ' VALUES (?,?,?,?,?,?)',
+            (user_id, group_id or '', int(topic_id), float(value), raw_text or '',
+             int(source_peer) if source_peer is not None else None),
+        )
+        c.commit()
+
+
+def get_rates(user_id: int, group_id: str, topic_id: int, since_hours: int = 168, limit: int = 500) -> list[dict]:
+    """تاریخچهٔ نرخ‌ها در بازه زمانی (ساعت)؛ پیش‌فرض ۷ روز."""
+    if not user_id:
+        return []
+    since = (datetime.utcnow() - timedelta(hours=int(since_hours))).strftime('%Y-%m-%d %H:%M:%S')
+    with sqlite3.connect(DB_PATH) as c:
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            'SELECT value, raw_text, created_at FROM rate_history '
+            ' WHERE user_id=? AND group_id=? AND topic_id=? AND created_at>=? '
+            ' ORDER BY created_at ASC LIMIT ?',
+            (user_id, group_id, int(topic_id), since, int(limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_rate(user_id: int, group_id: str, topic_id: int) -> dict | None:
+    if not user_id:
+        return None
+    with sqlite3.connect(DB_PATH) as c:
+        c.row_factory = sqlite3.Row
+        r = c.execute(
+            'SELECT value, raw_text, created_at FROM rate_history '
+            ' WHERE user_id=? AND group_id=? AND topic_id=? '
+            ' ORDER BY created_at DESC LIMIT 1',
+            (user_id, group_id, int(topic_id)),
+        ).fetchone()
+        return dict(r) if r else None
+
+
+def get_last_chart_msg(user_id: int, group_id: str, topic_id: int) -> int | None:
+    with sqlite3.connect(DB_PATH) as c:
+        r = c.execute(
+            'SELECT message_id FROM chart_message WHERE user_id=? AND group_id=? AND topic_id=?',
+            (user_id, group_id, int(topic_id)),
+        ).fetchone()
+        return int(r[0]) if r else None
+
+
+def save_last_chart_msg(user_id: int, group_id: str, topic_id: int, message_id: int):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            'INSERT INTO chart_message (user_id, group_id, topic_id, message_id, updated_at)'
+            ' VALUES (?,?,?,?,CURRENT_TIMESTAMP)'
+            ' ON CONFLICT(user_id,group_id,topic_id) DO UPDATE SET'
+            ' message_id=excluded.message_id, updated_at=CURRENT_TIMESTAMP',
+            (user_id, group_id, int(topic_id), int(message_id)),
+        )
+        c.commit()
+
+
+def clear_last_chart_msg(user_id: int, group_id: str, topic_id: int):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            'DELETE FROM chart_message WHERE user_id=? AND group_id=? AND topic_id=?',
+            (user_id, group_id, int(topic_id)),
+        )
+        c.commit()
 
 
 def record_forward(user_id: int, group_id: str, topic_id: int, source_peer: int):
