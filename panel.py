@@ -28,7 +28,7 @@ from telethon.utils import get_peer_id
 from config_util import (
     normalize_config, empty_config, find_group, new_group_id,
     config_stats, dashboard_stats, group_config_stats,
-    parse_value, get_rates, latest_rate,
+    parse_value, get_rates, latest_rate, delete_rate, delete_rates_range,
 )
 import forwarder as fwd
 
@@ -788,6 +788,33 @@ def api_chart_data(group_id: str, topic_id: int):
         'count': len(rates),
         'hours': hours,
     })
+
+
+@app.route('/api/charts/<group_id>/<int:topic_id>/rate/<int:rate_id>', methods=['DELETE'])
+@login_required
+def api_chart_delete_rate(group_id: str, topic_id: int, rate_id: int):
+    uid = cur_uid()
+    ok = delete_rate(uid, group_id, topic_id, rate_id)
+    if not ok:
+        return jsonify({'ok': False, 'msg': 'ردیف یافت نشد'}), 404
+    return jsonify({'ok': True})
+
+
+@app.route('/api/charts/<group_id>/<int:topic_id>/rates_bulk', methods=['POST'])
+@login_required
+def api_chart_bulk_delete_rates(group_id: str, topic_id: int):
+    """حذف outlier ها: مقادیر کوچک‌تر از min یا بزرگ‌تر از max."""
+    uid = cur_uid()
+    data = request.get_json() or {}
+    min_v = data.get('min')
+    max_v = data.get('max')
+    try:
+        min_v = float(min_v) if min_v not in (None, '') else None
+        max_v = float(max_v) if max_v not in (None, '') else None
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'msg': 'مقدار نامعتبر'}), 400
+    n = delete_rates_range(uid, group_id, topic_id, min_v, max_v)
+    return jsonify({'ok': True, 'deleted': n})
 
 
 @app.route('/chart/<group_id>/<int:topic_id>')

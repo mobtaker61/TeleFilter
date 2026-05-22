@@ -35,6 +35,15 @@
     .empty i { font-size:2.5rem; display:block; margin-bottom:.7rem; }
     .back { color:#475569; text-decoration:none; font-size:.85rem; }
     .back:hover { color:#1e40af; }
+    .btn-del-row { border:none; background:transparent; color:#cbd5e1; font-size:1rem;
+      padding:.2rem .45rem; border-radius:6px; cursor:pointer; transition:.15s; }
+    .btn-del-row:hover { background:#fef2f2; color:#dc2626; }
+    .cleanup-box { background:#fff7ed; border:1px solid #fed7aa; border-radius:12px;
+      padding:.85rem 1rem; margin:1.2rem 0 .8rem; display:flex; align-items:center;
+      gap:.6rem; flex-wrap:wrap; font-size:.82rem; color:#9a3412; }
+    .cleanup-box input { width:120px; }
+    .cleanup-box .btn { font-size:.78rem; }
+    .table-wrap { max-height:380px; overflow:auto; border-radius:10px; border:1px solid #f1f5f9; }
   </style>
 </head>
 <body>
@@ -60,14 +69,30 @@
 
   <div class="chart-wrap"><canvas id="chartCanvas"></canvas></div>
 
-  <h6 style="font-weight:600;color:#334155;margin-top:1.4rem">آخرین ۲۰ ثبت</h6>
-  <div id="tableBox">
+  <div class="cleanup-box">
+    <i class="bi bi-funnel-fill"></i>
+    <span>حذف مقادیر پرت (outlier):</span>
+    <input type="number" id="minVal" class="form-control form-control-sm" placeholder="حداقل مقبول" step="any">
+    <input type="number" id="maxVal" class="form-control form-control-sm" placeholder="حداکثر مقبول" step="any">
+    <button class="btn btn-sm btn-outline-danger" onclick="bulkDelete()">
+      <i class="bi bi-trash3"></i> حذف خارج از بازه
+    </button>
+    <span class="small text-muted">مقادیر کوچک‌تر از حداقل یا بزرگ‌تر از حداکثر حذف می‌شوند</span>
+  </div>
+
+  <h6 style="font-weight:600;color:#334155;margin-top:1.4rem">
+    تاریخچهٔ ردیف‌ها
+    <small class="text-muted fw-normal" style="font-size:.75rem">— برای حذف ردیف اشتباه، آیکن سطل را بزنید</small>
+  </h6>
+  <div class="table-wrap">
     <table>
-      <thead><tr><th>زمان</th><th>مقدار</th><th>متن خام</th></tr></thead>
+      <thead><tr><th>زمان</th><th>مقدار</th><th>متن خام</th><th></th></tr></thead>
       <tbody id="tableBody"></tbody>
     </table>
   </div>
 </div>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -163,17 +188,70 @@ function renderChart(rates, label) {
 
 function renderTable(rates) {
   const body = document.getElementById('tableBody');
-  const last = rates.slice(-20).reverse();
+  const last = rates.slice().reverse();
   if (!last.length) {
-    body.innerHTML = '<tr><td colspan="3" class="empty"><i class="bi bi-inbox"></i>هنوز داده‌ای ثبت نشده</td></tr>';
+    body.innerHTML = '<tr><td colspan="4" class="empty"><i class="bi bi-inbox"></i>هنوز داده‌ای ثبت نشده</td></tr>';
     return;
   }
   body.innerHTML = last.map(r => `
-    <tr>
+    <tr data-id="${r.id}">
       <td style="white-space:nowrap">${fmtDt(r.created_at)}</td>
       <td style="font-weight:600;color:#1e40af">${fmtNum(r.value)}</td>
-      <td style="color:#64748b;font-size:.78rem">${(r.raw_text || '').slice(0,80)}</td>
+      <td style="color:#64748b;font-size:.78rem">${escapeHtml((r.raw_text || '').slice(0,80))}</td>
+      <td style="width:32px"><button class="btn-del-row" title="حذف این ردیف"
+          onclick="delRow(${r.id})"><i class="bi bi-trash3"></i></button></td>
     </tr>`).join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, m =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+async function delRow(rateId) {
+  if (!confirm('این مقدار از تاریخچه حذف شود؟')) return;
+  try {
+    const r = await fetch(`/api/charts/${groupId}/${topicId}/rate/${rateId}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.ok) {
+      await load();
+    } else {
+      alert(d.msg || 'خطا در حذف');
+    }
+  } catch {
+    alert('خطای شبکه');
+  }
+}
+
+async function bulkDelete() {
+  const minV = document.getElementById('minVal').value;
+  const maxV = document.getElementById('maxVal').value;
+  if (minV === '' && maxV === '') {
+    alert('حداقل یکی از مقادیر را وارد کنید');
+    return;
+  }
+  const range = [minV !== '' ? minV : '−∞', maxV !== '' ? maxV : '+∞'].join(' ، ');
+  if (!confirm(`همه مقادیر خارج از بازه [${range}] حذف شوند؟`)) return;
+  try {
+    const r = await fetch(`/api/charts/${groupId}/${topicId}/rates_bulk`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        min: minV !== '' ? Number(minV) : null,
+        max: maxV !== '' ? Number(maxV) : null,
+      }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      alert(`${d.deleted} ردیف حذف شد`);
+      document.getElementById('minVal').value = '';
+      document.getElementById('maxVal').value = '';
+      await load();
+    } else {
+      alert(d.msg || 'خطا');
+    }
+  } catch {
+    alert('خطای شبکه');
+  }
 }
 
 document.querySelectorAll('.range-btn').forEach(b => {

@@ -955,7 +955,8 @@ function renderFilterRules(si, filters) {
 function renderTopicDetail() {
   hideMainPanels();
   const detail = document.getElementById('topicDetail');
-  if (!selGroupId || !selTopicId) {
+  // tid === 0 برای «چت اصلی» در گروه‌های non-forum معتبر است؛ پس null/undefined را چک می‌کنیم
+  if (!selGroupId || selTopicId === null || selTopicId === undefined) {
     if (selGroupId) loadGroupDashboard(selGroupId);
     else loadDashboard();
     return;
@@ -964,17 +965,20 @@ function renderTopicDetail() {
   const g = groups.find(x => x.id === selGroupId);
   const topics = tgTopicsByGroup[selGroupId] || [];
   const tgt = topics.find(t => t.id === selTopicId);
-  const title = tgt ? tgt.title : `Topic ${selTopicId}`;
+  const isMainChat = (selTopicId === 0 && !groupIsForum(g));
+  const title = tgt ? tgt.title : (isMainChat ? 'چت اصلی' : `Topic ${selTopicId}`);
+  const headerSub = isMainChat ? 'چت اصلی' : `Topic ${selTopicId}`;
+  const headerIcon = isMainChat ? 'bi-chat-dots' : 'bi-hash';
   const cfg = ensureCfg();
   const sources = cfg.sources;
   const chartOn = !!cfg.chart_enabled;
 
   detail.innerHTML = `
     <div class="topic-hdr">
-      <div class="topic-hdr-icon"><i class="bi bi-hash"></i></div>
+      <div class="topic-hdr-icon"><i class="bi ${headerIcon}"></i></div>
       <div>
         <div class="topic-hdr-title">${esc(title)}</div>
-        <div class="topic-hdr-id">${esc(g?.title || '')} · Topic ${selTopicId}</div>
+        <div class="topic-hdr-id">${esc(g?.title || '')} · ${headerSub}</div>
       </div>
       <button class="btn btn-sm btn-outline-secondary me-0 ms-auto" onclick="selectGroup('${selGroupId}')">
         <i class="bi bi-people me-1"></i>پروفایل گروه</button>

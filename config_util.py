@@ -217,12 +217,46 @@ def get_rates(user_id: int, group_id: str, topic_id: int, since_hours: int = 168
     with sqlite3.connect(DB_PATH) as c:
         c.row_factory = sqlite3.Row
         rows = c.execute(
-            'SELECT value, raw_text, created_at FROM rate_history '
+            'SELECT id, value, raw_text, created_at FROM rate_history '
             ' WHERE user_id=? AND group_id=? AND topic_id=? AND created_at>=? '
             ' ORDER BY created_at ASC LIMIT ?',
             (user_id, group_id, int(topic_id), since, int(limit)),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def delete_rate(user_id: int, group_id: str, topic_id: int, rate_id: int) -> bool:
+    """حذف امن یک ردیف از تاریخچه — فقط متعلق به همان کاربر/گروه/تاپیک."""
+    if not user_id:
+        return False
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(
+            'DELETE FROM rate_history WHERE id=? AND user_id=? AND group_id=? AND topic_id=?',
+            (int(rate_id), user_id, group_id, int(topic_id)),
+        )
+        c.commit()
+        return cur.rowcount > 0
+
+
+def delete_rates_range(user_id: int, group_id: str, topic_id: int,
+                       min_value: float | None = None, max_value: float | None = None) -> int:
+    """حذف ردیف‌هایی که خارج از بازهٔ مقبول هستند (برای پاک‌سازی outlier ها)."""
+    if not user_id or (min_value is None and max_value is None):
+        return 0
+    where = 'user_id=? AND group_id=? AND topic_id=?'
+    params: list = [user_id, group_id, int(topic_id)]
+    conds = []
+    if min_value is not None:
+        conds.append('value < ?')
+        params.append(float(min_value))
+    if max_value is not None:
+        conds.append('value > ?')
+        params.append(float(max_value))
+    where += ' AND (' + ' OR '.join(conds) + ')'
+    with sqlite3.connect(DB_PATH) as c:
+        cur = c.execute(f'DELETE FROM rate_history WHERE {where}', params)
+        c.commit()
+        return cur.rowcount
 
 
 def latest_rate(user_id: int, group_id: str, topic_id: int) -> dict | None:
