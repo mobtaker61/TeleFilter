@@ -18,25 +18,32 @@ _MPL_READY: bool | None = None
 _LOAD_ERROR: str = ''
 
 
-def _load_mpl():
-    """matplotlib را در اولین فراخوانی لود می‌کند؛ خطا را log می‌کند."""
+def _load_mpl(force: bool = False):
+    """matplotlib را در اولین فراخوانی (یا force=True) لود می‌کند."""
     global _MPL_READY, _LOAD_ERROR
-    if _MPL_READY is True:
+    if not force and _MPL_READY is True:
         return True
-    if _MPL_READY is False:
+    if not force and _MPL_READY is False:
         return False
     try:
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot  # noqa: F401
         import matplotlib.dates   # noqa: F401
+        import numpy              # noqa: F401
         _MPL_READY = True
+        _LOAD_ERROR = ''
+        logger.info("matplotlib loaded ok (version=%s)", matplotlib.__version__)
         return True
-    except Exception as e:
-        _LOAD_ERROR = str(e)
-        logger.error("matplotlib unavailable: %s", e)
+    except BaseException as e:  # نه فقط Exception — ImportError از numpy گاهی SystemExit می‌اندازد
+        kind = type(e).__name__
+        msg = str(e) or repr(e)
+        _LOAD_ERROR = f'{kind}: {msg}'
+        logger.error("matplotlib unavailable [%s]: %s", kind, msg)
         logger.error(
-            "نصب پیش‌نیاز سیستمی لازم است: sudo apt-get install -y libgl1 libglib2.0-0"
+            "اگر روی سرور است، اجرا کنید: "
+            "sudo apt-get install -y libgl1 libglib2.0-0 "
+            "&& pip install --force-reinstall matplotlib numpy"
         )
         _MPL_READY = False
         return False
@@ -47,6 +54,11 @@ def is_available() -> bool:
     if _MPL_READY is None:
         _load_mpl()
     return bool(_MPL_READY)
+
+
+def reload() -> bool:
+    """تلاش مجدد برای لود matplotlib — وقتی کاربر تازه نصبش کرده."""
+    return _load_mpl(force=True)
 
 
 def load_error() -> str:

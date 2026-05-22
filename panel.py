@@ -840,13 +840,17 @@ def fwd_diag():
 @app.route('/api/charts/status')
 @login_required
 def api_chart_status():
-    """وضعیت matplotlib + لیست تاپیک‌هایی که چارت فعال دارند."""
+    """وضعیت matplotlib + لیست تاپیک‌هایی که چارت فعال دارند.
+    با ?retry=1 یک تلاش مجدد برای لود matplotlib (پس از pip install) می‌کند.
+    """
     try:
         import charts as _charts
+        if request.args.get('retry') == '1':
+            _charts.reload()
         ok = _charts.is_available()
         err = _charts.load_error() if not ok else ''
     except Exception as e:
-        ok, err = False, f'charts module load failed: {e}'
+        ok, err = False, f'charts module load failed: {type(e).__name__}: {e}'
 
     uid = cur_uid()
     cfg = load_user_config(uid)

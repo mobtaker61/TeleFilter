@@ -873,16 +873,18 @@ async function testChartSend() {
   if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-send"></i> ارسال چارت آزمایشی'; }
 }
 
-async function checkChartStatus() {
+async function checkChartStatus(retry = true) {
   const out = document.getElementById('chartDiagOut');
   out.innerHTML = '<span class="text-muted">در حال بررسی…</span>';
   try {
-    const d = await (await fetch('/api/charts/status')).json();
+    const url = '/api/charts/status' + (retry ? '?retry=1' : '');
+    const d = await (await fetch(url)).json();
     if (d.matplotlib_available) {
       out.innerHTML = '<span class="text-success">✓ matplotlib در دسترس است</span>';
     } else {
+      const err = d.error || 'خطای نامشخص (احتمالاً سرویس restart نشده)';
       out.innerHTML = `<span class="text-danger">✗ matplotlib در دسترس نیست</span>
-        <br><small>${esc(d.error || '')}</small>
+        <br><small class="text-muted">${esc(err)}</small>
         <br><code class="small">${esc(d.install_hint || '')}</code>`;
     }
   } catch {
