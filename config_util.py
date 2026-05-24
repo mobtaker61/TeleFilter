@@ -88,6 +88,7 @@ def _norm_source(s: dict) -> dict:
         'chat': s.get('chat', ''),
         'filters': s.get('filters', []),
         'value_regex': str(s.get('value_regex', '') or ''),
+        'enabled': bool(s.get('enabled', True)),
     }
 
 

@@ -126,6 +126,9 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
             skip_unchanged = bool(t.get('skip_unchanged', True))
             chart_days = int(t.get('chart_days') or 7)
             for s in t.get('sources') or []:
+                # سورس‌های غیرفعال کاملاً نادیده گرفته می‌شوند
+                if s.get('enabled') is False:
+                    continue
                 raw_chat = s.get('chat')
                 chat = raw_chat.strip() if isinstance(raw_chat, str) else raw_chat
                 if not chat:

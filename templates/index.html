@@ -185,6 +185,17 @@
     .chart-toggle { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
     .chart-fields { margin-top: .9rem; padding-top: .9rem; border-top: 1px dashed #bfdbfe; }
     .src-regex { margin-top: .8rem; padding-top: .8rem; border-top: 1px dashed #e2e8f0; }
+    .src-toggle { display: flex; align-items: center; margin-inline-end: .2rem; flex-shrink: 0; }
+    .src-toggle .form-check-input { cursor: pointer; margin: 0; }
+    .source-card.disabled { background: #f8fafc; border-color: #e2e8f0; opacity: .6; }
+    .source-card.disabled:hover { border-color: #cbd5e1; box-shadow: none; opacity: .8; }
+    .source-card.disabled .src-top input,
+    .source-card.disabled .filter-rules-wrap,
+    .source-card.disabled .src-regex { filter: grayscale(.8); }
+    .source-card.disabled::before { content: 'غیرفعال'; position: absolute; top: .5rem; left: .8rem;
+      background: #fef3c7; color: #92400e; padding: 1px 8px; border-radius: 6px;
+      font-size: .65rem; font-weight: 600; }
+    .source-card { position: relative; }
     .src-regex input, .src-regex textarea { font-family: 'JetBrains Mono', 'Vazirmatn', monospace;
       font-size: .82rem; }
     .src-regex label { font-weight: 500; }

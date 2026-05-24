@@ -41,6 +41,7 @@ function buildCfgMapFromGroups(grps) {
         chat: s.chat || '',
         filters: normalizeFilters(s.filters),
         value_regex: s.value_regex || '',
+        enabled: s.enabled !== false,
       }));
       m[cfgKey(g.id, t.topic_id)] = {
         sources,
@@ -801,13 +802,19 @@ function syncTopics() {
 
 // ── Sources & filters (topic detail) ────────────────────
 function addSource() {
-  ensureCfg().sources.push({ chat: '', filters: [], value_regex: '' });
+  ensureCfg().sources.push({ chat: '', filters: [], value_regex: '', enabled: true });
   renderTopicDetail();
   markDirty();
 }
 
 function updateSourceRegex(si, val) {
   ensureCfg().sources[si].value_regex = val;
+  markDirty();
+}
+
+function toggleSourceEnabled(si, val) {
+  ensureCfg().sources[si].enabled = !!val;
+  renderTopicDetail();
   markDirty();
 }
 
@@ -1104,9 +1111,15 @@ function renderTopicDetail() {
       <h6><i class="bi bi-broadcast-pin"></i> سورس‌ها</h6>
       <button class="btn btn-sm btn-outline-primary" onclick="addSource()"><i class="bi bi-plus-lg me-1"></i>سورس</button>
     </div>
-    ${sources.length ? sources.map((src, si) => `
-      <div class="source-card">
+    ${sources.length ? sources.map((src, si) => {
+      const isEnabled = src.enabled !== false;
+      return `
+      <div class="source-card ${isEnabled ? '' : 'disabled'}">
         <div class="src-top">
+          <label class="src-toggle form-check form-switch m-0" title="${isEnabled ? 'فعال — کلیک برای غیرفعال‌سازی' : 'غیرفعال — کلیک برای فعال‌سازی'}">
+            <input class="form-check-input" type="checkbox" ${isEnabled ? 'checked' : ''}
+                   onchange="toggleSourceEnabled(${si}, this.checked)">
+          </label>
           <i class="bi bi-telegram"></i>
           <input type="text" dir="ltr" value="${esc(src.chat || '')}" onchange="updateChat(${si},this.value)" placeholder="@channel">
           <button class="src-del" onclick="deleteSource(${si})"><i class="bi bi-x-circle-fill"></i></button>
@@ -1132,7 +1145,8 @@ function renderTopicDetail() {
               </div>
             </div>
           </div>` : ''}
-      </div>`).join('')
+      </div>`;
+    }).join('')
       : '<div class="no-sources"><i class="bi bi-inbox"></i>سورسی نیست</div>'}
     <button class="btn-add-src mt-2" onclick="addSource()"><i class="bi bi-plus-circle"></i> سورس جدید</button>
     <p class="text-warning mt-3 mb-0" style="font-size:.78rem"><i class="bi bi-exclamation-triangle me-1"></i>
@@ -1200,6 +1214,7 @@ async function saveAll() {
       chat: s.chat || '',
       filters: s.filters || [],
       value_regex: s.value_regex || '',
+      enabled: s.enabled !== false,
     })),
   });
   const outGroups = groups.map(g => {
