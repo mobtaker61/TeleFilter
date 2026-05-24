@@ -29,6 +29,7 @@ from config_util import (
     normalize_config, empty_config, find_group, new_group_id,
     config_stats, dashboard_stats, group_config_stats,
     parse_value, get_rates, latest_rate, delete_rate, delete_rates_range,
+    clean_text as _clean_text,
 )
 import forwarder as fwd
 
@@ -783,14 +784,19 @@ def fwd_logs():
 @app.route('/api/parse_value/test', methods=['POST'])
 @login_required
 def api_parse_value_test():
-    """تست regex استخراج عدد روی متن نمونه."""
+    """تست regex استخراج عدد روی متن نمونه؛ پشتیبانی از clean_text."""
     data = request.get_json() or {}
     text = data.get('text', '') or ''
     regex = data.get('regex', '') or ''
-    value, raw = parse_value(text, regex or None)
+    do_clean = bool(data.get('clean', False))
+    cleaned = _clean_text(text) if do_clean else text
+    value, raw = parse_value(cleaned, regex or None)
+    resp = {'cleaned': cleaned if do_clean else None}
     if value is None:
-        return jsonify({'ok': False, 'msg': 'عددی استخراج نشد'})
-    return jsonify({'ok': True, 'value': value, 'raw': raw})
+        resp.update({'ok': False, 'msg': 'عددی استخراج نشد'})
+    else:
+        resp.update({'ok': True, 'value': value, 'raw': raw})
+    return jsonify(resp)
 
 
 @app.route('/api/charts/<group_id>/<int:topic_id>/data')

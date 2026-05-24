@@ -42,6 +42,7 @@ function buildCfgMapFromGroups(grps) {
         filters: normalizeFilters(s.filters),
         value_regex: s.value_regex || '',
         enabled: s.enabled !== false,
+        clean_text: !!s.clean_text,
       }));
       m[cfgKey(g.id, t.topic_id)] = {
         sources,
@@ -809,8 +810,13 @@ function syncTopics() {
 
 // ── Sources & filters (topic detail) ────────────────────
 function addSource() {
-  ensureCfg().sources.push({ chat: '', filters: [], value_regex: '', enabled: true });
+  ensureCfg().sources.push({ chat: '', filters: [], value_regex: '', enabled: true, clean_text: false });
   renderTopicDetail();
+  markDirty();
+}
+
+function toggleSourceCleanText(si, val) {
+  ensureCfg().sources[si].clean_text = !!val;
   markDirty();
 }
 
@@ -871,12 +877,15 @@ async function testSourceRegex(si) {
   try {
     const d = await (await fetch('/api/parse_value/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, regex: src.value_regex || '' }),
+      body: JSON.stringify({ text, regex: src.value_regex || '', clean: !!src.clean_text }),
     })).json();
+    const cleanedHtml = d.cleaned != null
+      ? `<div class="small text-muted mt-1">پس از پاک‌سازی: <code dir="ltr">${esc(d.cleaned)}</code></div>`
+      : '';
     if (d.ok) {
-      outEl.innerHTML = `<span class="text-success">✓ مقدار استخراج‌شده: <b>${d.value}</b>${d.raw ? ` <small class="text-muted">(${esc(d.raw)})</small>` : ''}</span>`;
+      outEl.innerHTML = `<span class="text-success">✓ مقدار: <b>${d.value}</b>${d.raw ? ` <small class="text-muted">(${esc(d.raw)})</small>` : ''}</span>${cleanedHtml}`;
     } else {
-      outEl.innerHTML = `<span class="text-danger">✗ ${esc(d.msg || 'استخراج ناموفق')}</span>`;
+      outEl.innerHTML = `<span class="text-danger">✗ ${esc(d.msg || 'استخراج ناموفق')}</span>${cleanedHtml}`;
     }
   } catch {
     outEl.innerHTML = '<span class="text-danger">خطای شبکه</span>';
@@ -1181,6 +1190,15 @@ function renderTopicDetail() {
                    value="${esc(src.value_regex || '')}"
                    oninput="updateSourceRegex(${si}, this.value)"
                    placeholder="مثلاً: ([\\d,\\.]+)">
+            <div class="form-check form-switch mt-2" title="حذف ایموجی، علائم دکوراتیو و کاراکترهای نامرئی قبل از regex">
+              <input class="form-check-input" type="checkbox" id="src_clean_${si}"
+                     ${src.clean_text ? 'checked' : ''}
+                     onchange="toggleSourceCleanText(${si}, this.checked)">
+              <label class="form-check-label small" for="src_clean_${si}">
+                <i class="bi bi-magic me-1"></i> پاک‌سازی متن پیش از استخراج
+                <span class="text-muted">(حذف ایموجی/کاراکترهای دکوراتیو)</span>
+              </label>
+            </div>
             <div class="regex-test mt-2">
               <textarea id="regex_sample_${si}" class="form-control form-control-sm" rows="2"
                         placeholder="یک نمونه پیام از این سورس را اینجا بچسبانید برای تست…"></textarea>
@@ -1264,6 +1282,7 @@ async function saveAll() {
       filters: s.filters || [],
       value_regex: s.value_regex || '',
       enabled: s.enabled !== false,
+      clean_text: !!s.clean_text,
     })),
   });
   const outGroups = groups.map(g => {

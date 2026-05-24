@@ -101,6 +101,7 @@ def _norm_source(s: dict) -> dict:
         'filters': s.get('filters', []),
         'value_regex': str(s.get('value_regex', '') or ''),
         'enabled': bool(s.get('enabled', True)),
+        'clean_text': bool(s.get('clean_text', False)),
     }
 
 
@@ -183,6 +184,48 @@ PERSIAN_DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '0123
 def normalize_digits(s: str) -> str:
     """تبدیل ارقام فارسی/عربی به انگلیسی."""
     return (s or '').translate(PERSIAN_DIGITS)
+
+
+# ── متن‌پاک‌کن: حذف ایموجی، علائم دکوراتیو، zero-width ───
+# هر چه بیشتر سختگیرانه پاک‌سازی شود، regex راحت‌تر match می‌کند.
+_EMOJI_CLEAN = re.compile(
+    '['
+    '\U0001F300-\U0001F6FF'    # Symbols & Pictographs
+    '\U0001F7E0-\U0001F7FF'    # Geometric shapes (colored circles/squares)
+    '\U0001F900-\U0001F9FF'    # Supplemental Symbols & Pictographs
+    '\U0001FA00-\U0001FAFF'    # Extended Pictographs
+    '\U00002600-\U000027BF'    # Misc Symbols + Dingbats (✓ ✅ ❌ ★ ☆ ...)
+    '\U00002B00-\U00002BFF'    # Misc Symbols and Arrows (⭐ ⬆ ⬇ ...)
+    '\U0001F1E0-\U0001F1FF'    # Regional Indicators (flags)
+    '\u200B-\u200F'            # Zero-width & directional marks
+    '\u202A-\u202E'            # Directional overrides
+    '\u2060-\u206F'            # Word joiner / invisible
+    '\uFE0F'                   # Variation Selector-16 (emoji style)
+    '•◆◇★☆♥♦♣♠✦▶◀▲▼►◄'
+    ']+'
+)
+# جداکننده‌های مرسوم هزارگان فارسی/عربی → کاما (تا regex استاندارد کار کند)
+_THOUSANDS_SEP = re.compile(r'[٫٬’‘`]')
+# علائم پانکچوئیشن غیرضروری اطراف اعداد (حفظ . , - + % و حروف فارسی/انگلیسی/عدد)
+_PUNCT_NOISE = re.compile(r'[«»"\'\(\)\[\]\{\}؛;،,]{2,}')
+
+
+def clean_text(text: str) -> str:
+    """
+    پاک‌سازی متن قبل از regex:
+      - حذف ایموجی، پرچم، علائم دکوراتیو
+      - حذف zero-width characters
+      - یکپارچه کردن جداکننده‌های هزارگان غیراستاندارد به ,
+      - collapse کردن whitespace ها به یک space
+    رشته اصلی (پیام تلگرام) دست‌نخورده می‌ماند — این فقط برای parse است.
+    """
+    if not text:
+        return ''
+    s = _EMOJI_CLEAN.sub(' ', text)
+    s = _THOUSANDS_SEP.sub(',', s)
+    s = _PUNCT_NOISE.sub(' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
 
 
 def parse_value(text: str, regex: str | None = None) -> tuple[float | None, str | None]:

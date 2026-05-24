@@ -23,6 +23,7 @@ from config_util import (
     normalize_config, record_forward,
     parse_value, record_rate, get_rates, latest_rate,
     get_last_chart_msg, save_last_chart_msg,
+    clean_text as _clean_text,
 )
 # charts را lazy لود می‌کنیم تا اگر matplotlib در سرور دچار خطا شد،
 # فوروارد عادی همچنان کار کند.
@@ -157,6 +158,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'skip_unchanged': skip_unchanged,
                         'chart_days': chart_days,
                         'max_change_percent': max_change_pct,
+                        'clean_text': bool(s.get('clean_text', False)),
                     }
                     for k in _peer_keys(src_ent):
                         source_map.setdefault(k, []).append(route)
@@ -226,7 +228,8 @@ async def _process_chart(
         value, raw_match = pre_parsed
     else:
         value_regex = route.get('value_regex') or None
-        value, raw_match = parse_value(raw_text, value_regex)
+        text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
+        value, raw_match = parse_value(text_for_parse, value_regex)
     if value is None:
         logger.warning(
             "[%s] chart: regex match failed topic=%s regex=%r sample=%r",
@@ -341,7 +344,8 @@ def install_handler(uid: int, client):
             pre_parsed = None
             if route.get('chart_enabled') and raw_text:
                 value_regex = route.get('value_regex') or None
-                v, raw_match = parse_value(raw_text, value_regex)
+                text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
+                v, raw_match = parse_value(text_for_parse, value_regex)
                 if v is not None:
                     pre_parsed = (v, raw_match)
                     last = latest_rate(uid, gid, tid)
