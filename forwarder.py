@@ -21,7 +21,7 @@ from telethon.utils import get_peer_id
 
 from config_util import (
     normalize_config, record_forward,
-    parse_value, record_rate, get_rates, latest_rate,
+    parse_value, record_rate, get_rates, get_rates_smart, latest_rate,
     get_last_chart_msg, save_last_chart_msg,
     clean_text as _clean_text,
     aggregate_rate_daily, list_days_in_range,
@@ -36,6 +36,13 @@ except Exception as _e:  # noqa: BLE001
     def charts_available() -> bool:  # type: ignore[no-redef]
         return False
     logging.getLogger('telefilter.forwarder').error("charts module load failed: %s", _e)
+
+# apex chart renderer (با Playwright) — اختیاری، fallback به matplotlib
+try:
+    from apex_chart import render_chart_png as _render_apex
+except Exception as _e:  # noqa: BLE001
+    _render_apex = None  # type: ignore[assignment]
+    logging.getLogger('telefilter.forwarder').warning("apex_chart load failed: %s", _e)
 
 logger = logging.getLogger('telefilter.forwarder')
 
@@ -240,26 +247,45 @@ async def _process_chart(
     record_rate(uid, gid, tid, value, raw_match or '', None)
     logger.info("[%s] chart: value=%s recorded topic=%s", uid, value, tid)
 
-    if render_rate_chart is None or not charts_available():
-        logger.warning(
-            "[%s] chart: matplotlib در دسترس نیست — تصویر ارسال نشد (نرخ ذخیره شد). "
-            "روی سرور این را اجرا کنید: pip install matplotlib && "
-            "sudo apt-get install -y libgl1 libglib2.0-0",
-            uid,
-        )
-        return
+    days = int(route.get('chart_days') or 7)
+    title = route.get('chart_label') or f"Topic {tid}"
+    png: bytes | None = None
 
-    try:
-        days = int(route.get('chart_days') or 7)
-        rates = get_rates(uid, gid, tid, since_hours=24 * days)
-        png = render_rate_chart(
-            rates,
-            title=route.get('chart_label') or f"Topic {tid}",
-            y_label=route.get('chart_label') or '',
-        )
-    except Exception as e:
-        logger.error("[%s] chart render failed: %s", uid, e, exc_info=True)
-        return
+    # ابتدا تلاش با ApexCharts (Playwright headless chromium)
+    if _render_apex is not None:
+        try:
+            data = get_rates_smart(uid, gid, tid, since_hours=24 * days)
+            png = await _render_apex(
+                data['rates'], title=title, mode=data['mode'], days=days,
+            )
+            if png:
+                logger.info("[%s] chart: rendered via apex (mode=%s, points=%d)",
+                            uid, data['mode'], data['count'])
+        except Exception as e:
+            logger.warning("[%s] apex render failed, falling back to matplotlib: %s", uid, e)
+            png = None
+
+    # fallback به matplotlib اگر apex در دسترس نباشد یا ناموفق
+    if png is None:
+        if render_rate_chart is None or not charts_available():
+            logger.warning(
+                "[%s] chart: نه ApexCharts نه matplotlib در دسترس است — تصویر ارسال نشد. "
+                "روی سرور این را اجرا کنید: pip install playwright && "
+                "playwright install --with-deps chromium   "
+                "(یا) pip install matplotlib && sudo apt-get install -y libgl1 libglib2.0-0",
+                uid,
+            )
+            return
+        try:
+            rates = get_rates(uid, gid, tid, since_hours=24 * days)
+            png = render_rate_chart(
+                rates,
+                title=title,
+                y_label=route.get('chart_label') or '',
+            )
+        except Exception as e:
+            logger.error("[%s] chart render failed: %s", uid, e, exc_info=True)
+            return
     if not png:
         logger.warning("[%s] chart render returned empty", uid)
         return

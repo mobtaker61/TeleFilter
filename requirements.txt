@@ -2,3 +2,7 @@ telethon>=1.28.0
 flask>=3.0.0
 gunicorn>=21.2.0
 matplotlib>=3.7.0
+# اختیاری — برای رندر زیبای ApexCharts در تصاویر چارت تلگرام.
+# اگر نصب نباشد، fallback خودکار به matplotlib می‌شود.
+# نصب کامل: pip install playwright && playwright install --with-deps chromium
+playwright>=1.40.0

@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'users.db')
 
-# Timezone محلی برای aggregation روزانه (Asia/Tehran = UTC+3:30).
+# Timezone محلی برای aggregation روزانه (Asia/Dubai = UTC+4).
 # created_at در DB به‌صورت UTC ذخیره می‌شود؛ برای تقسیم به روز این modifierها را به DATE/datetime SQLite پاس می‌دهیم.
 # توجه: SQLite چند modifier باید به‌صورت argument جدا باشند.
-LOCAL_TZ_MODIFIERS = ("+3 hours", "+30 minutes")
+LOCAL_TZ_MODIFIERS = ("+4 hours",)
 
 
 def _day_expr(col: str = 'created_at') -> str:
@@ -394,18 +394,24 @@ def get_rates_smart(user_id: int, group_id: str, topic_id: int,
     """
     خواندن هوشمند داده‌ها برای نمودار:
       - اگر بازه ≤ daily_threshold_hours (پیش‌فرض ۷ روز): تمام ردیف‌های خام
-      - اگر بازه > آن: ترکیب rate_daily (روزهای کامل) + rate_history (روز جاری)
+      - اگر بازه > آن: فقط rate_daily (یک نقطه per روز با میانگین + min/max)
+        — قبلاً ردیف‌های راه ۲۴ ساعت آخر هم اضافه می‌شد که چارت را شلوغ می‌کرد.
 
     خروجی: {'rates': [...], 'mode': 'raw'|'daily', 'count': int}
     """
     if since_hours <= daily_threshold_hours:
         rates = get_rates(user_id, group_id, topic_id, since_hours=since_hours, limit=None)
         return {'rates': rates, 'mode': 'raw', 'count': len(rates)}
+    # حالت روزانه: aggregate برای همه‌ی بازه — یک نقطه per روز
+    # برای اینکه روز جاری هم به‌روز باشد، خودکار aggregate آن را refresh می‌کنیم
+    today = (datetime.utcnow() + timedelta(hours=4)).strftime('%Y-%m-%d')   # Dubai TZ
+    try:
+        aggregate_rate_daily(user_id, group_id, topic_id, days=[today])
+    except Exception:
+        pass
     days = max(1, int(since_hours / 24))
     daily = get_rates_daily(user_id, group_id, topic_id, since_days=days)
-    today_rates = get_rates(user_id, group_id, topic_id, since_hours=24, limit=None)
-    rates = daily + today_rates
-    return {'rates': rates, 'mode': 'daily', 'count': len(rates)}
+    return {'rates': daily, 'mode': 'daily', 'count': len(daily)}
 
 
 def aggregate_rate_daily(user_id: int, group_id: str, topic_id: int,

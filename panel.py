@@ -1059,26 +1059,12 @@ def api_chart_status():
 @login_required
 def api_chart_test_send(group_id: str, topic_id: int):
     """ارسال دستی چارت آزمایشی به گروه/تاپیک برای دیباگ.
-    حتی اگر داده‌ای ثبت نشده باشد، یک placeholder ارسال می‌کند تا مشکل send_file
-    (مجوز/topic_id/...) از مشکل parse تفکیک شود.
+    اول با ApexCharts (Playwright) سعی می‌کند، در صورت ناموفقی به matplotlib برمی‌گردد.
     """
     uid = cur_uid()
     c = ensure_client(uid)
     if not c:
         return jsonify({'ok': False, 'msg': 'اتصال تلگرام برقرار نیست'}), 503
-
-    try:
-        import charts as _charts
-    except Exception as e:
-        return jsonify({'ok': False, 'msg': f'charts module load failed: {e}'}), 500
-
-    if not _charts.is_available():
-        return jsonify({
-            'ok': False,
-            'msg': 'matplotlib در دسترس نیست',
-            'error': _charts.load_error(),
-            'hint': 'sudo apt install -y libgl1 libglib2.0-0 && pip install matplotlib',
-        }), 500
 
     cfg = load_user_config(uid)
     g = find_group(cfg, group_id)
@@ -1093,15 +1079,45 @@ def api_chart_test_send(group_id: str, topic_id: int):
             chart_days = int(t.get('chart_days') or 7)
             break
 
-    rates = get_rates(uid, group_id, topic_id, since_hours=24 * chart_days)
+    data = get_rates_smart(uid, group_id, topic_id, since_hours=24 * chart_days)
+    rates = data['rates']
+    mode = data['mode']
+
+    render_engine = 'matplotlib'
+    png: bytes | None = None
+
+    # 1) سعی با apex
     try:
-        png = _charts.render_rate_chart(
-            rates,
-            title=chart_label or f"Topic {topic_id} (test)",
-            y_label=chart_label or '',
-        )
+        from apex_chart import render_chart_png as _apex_render
+        async def _do_apex():
+            return await _apex_render(rates, title=chart_label or f"Topic {topic_id}",
+                                      mode=mode, days=chart_days)
+        png = tg_run(_do_apex(), timeout=20)
+        if png:
+            render_engine = 'apex'
     except Exception as e:
-        return jsonify({'ok': False, 'stage': 'render', 'msg': str(e)}), 500
+        _charts_log.warning("apex render failed in test_send: %s", e)
+        png = None
+
+    # 2) fallback به matplotlib
+    if not png:
+        try:
+            import charts as _charts
+            if not _charts.is_available():
+                return jsonify({
+                    'ok': False,
+                    'msg': 'هیچ‌یک از Apex/matplotlib در دسترس نیستند',
+                    'error': _charts.load_error(),
+                    'hint': 'playwright install --with-deps chromium  یا  apt install libgl1 libglib2.0-0',
+                }), 500
+            png = _charts.render_rate_chart(
+                rates,
+                title=chart_label or f"Topic {topic_id} (test)",
+                y_label=chart_label or '',
+            )
+        except Exception as e:
+            return jsonify({'ok': False, 'stage': 'render', 'msg': str(e)}), 500
+
     if not png:
         return jsonify({'ok': False, 'stage': 'render', 'msg': 'render returned empty'}), 500
 
@@ -1115,7 +1131,7 @@ def api_chart_test_send(group_id: str, topic_id: int):
             except Exception:
                 pass
         named = fwd._named_png(chart_label or f'topic_{topic_id}', png)
-        kwargs = {'caption': f'📊 {chart_label} (test)', 'force_document': False}
+        kwargs = {'caption': f'📊 {chart_label} (test · {render_engine})', 'force_document': False}
         if is_forum and topic_id and topic_id > 0:
             kwargs['reply_to'] = int(topic_id)
         sent = await c.send_file(target, file=named, **kwargs)
@@ -1126,7 +1142,10 @@ def api_chart_test_send(group_id: str, topic_id: int):
 
     try:
         msg_id = tg_run(_send(), timeout=45)
-        return jsonify({'ok': True, 'message_id': msg_id, 'rates_count': len(rates)})
+        return jsonify({
+            'ok': True, 'message_id': msg_id,
+            'rates_count': len(rates), 'mode': mode, 'engine': render_engine,
+        })
     except Exception as e:
         return jsonify({'ok': False, 'stage': 'send', 'msg': str(e)}), 500
 
