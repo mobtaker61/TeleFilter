@@ -533,6 +533,38 @@ def delete_rates_range(user_id: int, group_id: str, topic_id: int,
         return cur.rowcount
 
 
+def latest_two_rates(user_id: int, group_id: str, topic_id: int) -> tuple[dict | None, dict | None]:
+    """دو نرخ آخر (جدیدترین، قبل از آن) برای محاسبه‌ی تغییر — هر کدام ممکن است None باشد."""
+    if not user_id:
+        return None, None
+    with sqlite3.connect(DB_PATH) as c:
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            'SELECT value, raw_text, created_at FROM rate_history '
+            ' WHERE user_id=? AND group_id=? AND topic_id=? '
+            ' ORDER BY created_at DESC LIMIT 2',
+            (user_id, group_id, int(topic_id)),
+        ).fetchall()
+    latest = dict(rows[0]) if len(rows) >= 1 else None
+    previous = dict(rows[1]) if len(rows) >= 2 else None
+    return latest, previous
+
+
+def compute_change(latest_v: float | None, previous_v: float | None) -> dict:
+    """{'dir': 'up'|'down'|'flat'|'new', 'diff': float, 'pct': float} — برای UI/caption."""
+    if latest_v is None:
+        return {'dir': 'new', 'diff': 0.0, 'pct': 0.0}
+    if previous_v is None:
+        return {'dir': 'new', 'diff': 0.0, 'pct': 0.0}
+    diff = float(latest_v) - float(previous_v)
+    if abs(diff) < 1e-9:
+        return {'dir': 'flat', 'diff': 0.0, 'pct': 0.0}
+    if previous_v == 0:
+        return {'dir': 'up' if diff > 0 else 'down', 'diff': diff, 'pct': 0.0}
+    pct = (diff / abs(previous_v)) * 100.0
+    return {'dir': 'up' if diff > 0 else 'down', 'diff': diff, 'pct': pct}
+
+
 def latest_rate(user_id: int, group_id: str, topic_id: int) -> dict | None:
     if not user_id:
         return None

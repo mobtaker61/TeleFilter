@@ -220,9 +220,40 @@ def _values_equal(a: float | None, b: float | None) -> bool:
     return abs(a - b) < 1e-9
 
 
+def _fmt_value(v: float) -> str:
+    """فرمت‌بندی عدد با جداکننده‌ی هزارگان."""
+    if v == int(v):
+        return f"{int(v):,}"
+    return f"{v:,.4f}".rstrip('0').rstrip('.')
+
+
+def _format_change(current: float, previous: float | None) -> str:
+    """
+    رشته‌ی تغییر برای caption:
+      🟢 +1,500 (+2.50%)
+      🔴 -800 (-1.20%)
+      ⚪ بدون تغییر
+      🆕 (بدون قبلی)
+    """
+    if previous is None:
+        return '🆕 اولین نرخ'
+    diff = current - previous
+    if abs(diff) < 1e-9:
+        return '⚪ بدون تغییر'
+    if previous == 0:
+        sign = '+' if diff > 0 else ''
+        emoji = '🟢' if diff > 0 else '🔴'
+        return f'{emoji} {sign}{_fmt_value(diff)}'
+    pct = (diff / abs(previous)) * 100.0
+    sign = '+' if diff > 0 else ''
+    emoji = '🟢' if diff > 0 else '🔴'
+    return f'{emoji} {sign}{_fmt_value(diff)} ({sign}{pct:.2f}%)'
+
+
 async def _process_chart(
     uid: int, client, route: dict, target, raw_text: str,
     pre_parsed: tuple[float | None, str | None] | None = None,
+    previous_value: float | None = None,
 ):
     """
     اگر برای این سورس chart فعال است:
@@ -298,8 +329,13 @@ async def _process_chart(
         except Exception as e:
             logger.warning("[%s] chart: delete old msg=%s failed: %s", uid, old_msg, e)
 
-    last_str = f"{int(value):,}" if value == int(value) else f"{value:,.4f}".rstrip('0').rstrip('.')
-    caption = f"📊 {route.get('chart_label') or ''}\nآخرین: {last_str}".strip()
+    last_str = _fmt_value(value)
+    change_line = _format_change(value, previous_value)
+    caption = (
+        f"📊 {route.get('chart_label') or ''}\n"
+        f"آخرین: {last_str}\n"
+        f"{change_line}"
+    ).strip()
     try:
         named = _named_png(route.get('chart_label') or f'topic_{tid}', png)
         kwargs = {'caption': caption, 'force_document': False}
@@ -369,6 +405,7 @@ def install_handler(uid: int, client):
             #   ۱) skip_unchanged: مقدار == آخرین → کامل skip (نه فوروارد، نه چارت)
             #   ۲) max_change_percent: تغییر بیش از حد → کامل skip (outlier ضد data corruption)
             pre_parsed = None
+            prev_value_for_caption: float | None = None
             if route.get('chart_enabled') and raw_text:
                 value_regex = route.get('value_regex') or None
                 text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
@@ -377,6 +414,7 @@ def install_handler(uid: int, client):
                     pre_parsed = (v, raw_match)
                     last = latest_rate(uid, gid, tid)
                     last_v = float(last.get('value') or 0) if last else None
+                    prev_value_for_caption = last_v
 
                     # چک ۱: مقدار تکراری
                     if route.get('skip_unchanged', True) and last_v is not None and _values_equal(last_v, v):
@@ -422,7 +460,11 @@ def install_handler(uid: int, client):
 
             if route.get('chart_enabled') and raw_text:
                 try:
-                    await _process_chart(uid, client, route, target, raw_text, pre_parsed=pre_parsed)
+                    await _process_chart(
+                        uid, client, route, target, raw_text,
+                        pre_parsed=pre_parsed,
+                        previous_value=prev_value_for_caption,
+                    )
                 except Exception as e:
                     logger.error("[%s] chart pipeline failed: %s", uid, e)
 

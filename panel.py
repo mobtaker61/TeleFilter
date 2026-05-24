@@ -31,6 +31,7 @@ from config_util import (
     parse_value, get_rates, get_rates_smart, latest_rate, delete_rate, delete_rates_range,
     clean_text as _clean_text,
     aggregate_rate_daily, list_days_in_range,
+    latest_two_rates, compute_change,
 )
 import forwarder as fwd
 
@@ -914,7 +915,11 @@ def api_public_charts_list(token: str):
         for t in g.get('topics') or []:
             if not t.get('chart_enabled'):
                 continue
-            last = latest_rate(uid, g.get('id'), int(t.get('topic_id') or 0))
+            last, prev = latest_two_rates(uid, g.get('id'), int(t.get('topic_id') or 0))
+            change = compute_change(
+                last.get('value') if last else None,
+                prev.get('value') if prev else None,
+            )
             items.append({
                 'group_id': g.get('id'),
                 'group_title': g.get('title', ''),
@@ -925,6 +930,8 @@ def api_public_charts_list(token: str):
                 'chart_order': int(t.get('chart_order') or 0),
                 'last_value': last.get('value') if last else None,
                 'last_time': last.get('created_at') if last else None,
+                'previous_value': prev.get('value') if prev else None,
+                'change': change,
             })
     # اولویت بالاتر (عدد کوچک‌تر) اول؛ سپس بر اساس نام برای ثبات
     items.sort(key=lambda x: (x['chart_order'], x['chart_label']))
