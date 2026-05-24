@@ -355,6 +355,9 @@
       <i class="bi bi-gear-fill"></i> تنظیمات
     </button>
     {% endif %}
+    <button class="btn-topbar" onclick="openPublicShare()" title="صفحه عمومی نمودارها">
+      <i class="bi bi-share-fill"></i> اشتراک عمومی
+    </button>
     <button class="btn-save" id="saveBtn" onclick="saveAll()">
       <i class="bi bi-floppy-fill"></i> ذخیره تغییرات
     </button>
@@ -702,6 +705,42 @@
       </div>
       <div class="modal-body" id="adminBody">
         <div class="text-center text-muted py-3"><i class="bi bi-hourglass-split spin me-2"></i>در حال بارگذاری…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: Public Share ══════════════════════════════════ -->
+<div class="modal fade" id="publicShareModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-share-fill me-2" style="color:#2563eb"></i>صفحهٔ عمومی نمودارها</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-3">
+          این لینک خصوصی شماست — هر کسی با این لینک می‌تواند بدون لاگین، نمودارهای فعال شما را ببیند.
+          فقط نمودارها (نه سورس‌ها، نه فیلترها) عمومی می‌شوند.
+        </p>
+        <div class="input-group input-group-sm mb-2">
+          <input type="text" class="form-control" id="publicLinkInput" readonly dir="ltr">
+          <button class="btn btn-outline-primary" onclick="copyPublicLink()" title="کپی">
+            <i class="bi bi-clipboard"></i>
+          </button>
+          <a class="btn btn-outline-success" id="publicLinkOpen" target="_blank" title="بازکردن">
+            <i class="bi bi-box-arrow-up-right"></i>
+          </a>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-3">
+          <small class="text-muted">
+            <i class="bi bi-info-circle"></i>
+            با ساخت لینک جدید، لینک قبلی نامعتبر می‌شود.
+          </small>
+          <button class="btn btn-sm btn-outline-warning" onclick="rotatePublicLink()">
+            <i class="bi bi-arrow-repeat"></i> لینک جدید بساز
+          </button>
+        </div>
       </div>
     </div>
   </div>

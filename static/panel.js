@@ -888,6 +888,49 @@ async function testChartSend() {
   if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-send"></i> ارسال چارت آزمایشی'; }
 }
 
+async function openPublicShare() {
+  const modalEl = document.getElementById('publicShareModal');
+  const m = new bootstrap.Modal(modalEl);
+  m.show();
+  const inp = document.getElementById('publicLinkInput');
+  const opn = document.getElementById('publicLinkOpen');
+  inp.value = 'در حال آماده‌سازی…';
+  try {
+    const d = await (await fetch('/api/me/public_token')).json();
+    const url = location.origin + d.url;
+    inp.value = url;
+    opn.href = url;
+  } catch {
+    inp.value = 'خطا — دوباره تلاش کنید';
+  }
+}
+
+async function rotatePublicLink() {
+  if (!confirm('با ساخت لینک جدید، لینک قبلی نامعتبر می‌شود. ادامه؟')) return;
+  try {
+    const d = await (await fetch('/api/me/public_token/rotate', { method: 'POST' })).json();
+    const url = location.origin + d.url;
+    document.getElementById('publicLinkInput').value = url;
+    document.getElementById('publicLinkOpen').href = url;
+    showToast('لینک جدید ساخته شد ✓', 'success');
+  } catch {
+    showToast('خطا در ساخت لینک', 'danger');
+  }
+}
+
+function copyPublicLink() {
+  const inp = document.getElementById('publicLinkInput');
+  inp.select();
+  inp.setSelectionRange(0, 99999);
+  try {
+    navigator.clipboard.writeText(inp.value);
+    showToast('کپی شد ✓', 'success');
+  } catch {
+    document.execCommand('copy');
+    showToast('کپی شد ✓', 'success');
+  }
+}
+
 async function checkChartStatus(retry = true) {
   const out = document.getElementById('chartDiagOut');
   out.innerHTML = '<span class="text-muted">در حال بررسی…</span>';

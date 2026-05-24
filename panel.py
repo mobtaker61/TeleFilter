@@ -17,7 +17,7 @@ import secrets
 import webbrowser
 from collections import deque
 from functools import wraps
-from flask import Flask, render_template, jsonify, request, session, redirect, url_for
+from flask import Flask, render_template, render_template_string, jsonify, request, session, redirect, url_for
 from telethon import TelegramClient
 from telethon.errors import (
     SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError, FloodWaitError,
@@ -125,11 +125,15 @@ def _init_db():
             phone       TEXT DEFAULT '',
             is_approved INTEGER DEFAULT 0,
             is_admin    INTEGER DEFAULT 0,
+            public_token TEXT DEFAULT '',
             created_at  TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
         cols = {r[1] for r in c.execute('PRAGMA table_info(users)').fetchall()}
         if 'phone' not in cols:
             c.execute('ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ""')
+        if 'public_token' not in cols:
+            c.execute('ALTER TABLE users ADD COLUMN public_token TEXT DEFAULT ""')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_users_public_token ON users(public_token)')
         c.commit()
 
 _init_db()
@@ -138,6 +142,37 @@ def db_save_phone(tg_id: int, phone: str):
     with _db() as c:
         c.execute('UPDATE users SET phone=? WHERE tg_id=?', (phone.strip(), tg_id))
         c.commit()
+
+
+def db_get_or_create_public_token(tg_id: int) -> str:
+    """توکن پابلیک کاربر — اگر نباشد، یکی تولید و ذخیره می‌کند."""
+    with _db() as c:
+        row = c.execute('SELECT public_token FROM users WHERE tg_id=?', (tg_id,)).fetchone()
+        if row and row['public_token']:
+            return row['public_token']
+        import secrets
+        tok = secrets.token_urlsafe(16)
+        c.execute('UPDATE users SET public_token=? WHERE tg_id=?', (tok, tg_id))
+        c.commit()
+        return tok
+
+
+def db_rotate_public_token(tg_id: int) -> str:
+    """ساخت توکن جدید — لینک قبلی نامعتبر می‌شود."""
+    import secrets
+    tok = secrets.token_urlsafe(16)
+    with _db() as c:
+        c.execute('UPDATE users SET public_token=? WHERE tg_id=?', (tok, tg_id))
+        c.commit()
+    return tok
+
+
+def db_user_by_public_token(token: str) -> dict | None:
+    if not token:
+        return None
+    with _db() as c:
+        row = c.execute('SELECT * FROM users WHERE public_token=?', (token,)).fetchone()
+        return dict(row) if row else None
 
 def _mask_phone(phone: str) -> str:
     p = phone.strip()
@@ -821,6 +856,103 @@ def api_chart_bulk_delete_rates(group_id: str, topic_id: int):
 @login_required
 def chart_page(group_id: str, topic_id: int):
     return render_template('chart.html', group_id=group_id, topic_id=topic_id)
+
+
+# ══════════════════════════════════════════════════════════
+#  Public chart sharing (no login required)
+# ══════════════════════════════════════════════════════════
+@app.route('/api/me/public_token')
+@login_required
+def api_me_public_token():
+    uid = cur_uid()
+    tok = db_get_or_create_public_token(uid)
+    return jsonify({'token': tok, 'url': url_for('public_charts_page', token=tok, _external=False)})
+
+
+@app.route('/api/me/public_token/rotate', methods=['POST'])
+@login_required
+def api_me_rotate_public_token():
+    uid = cur_uid()
+    tok = db_rotate_public_token(uid)
+    return jsonify({'token': tok, 'url': url_for('public_charts_page', token=tok, _external=False)})
+
+
+@app.route('/p/<token>')
+def public_charts_page(token: str):
+    u = db_user_by_public_token(token)
+    if not u:
+        return render_template_string(
+            '<h2 style="font-family:sans-serif;text-align:center;margin-top:4rem;color:#64748b">'
+            'لینک نامعتبر یا منقضی شده است</h2>'
+        ), 404
+    return render_template('public_charts.html', token=token, owner_name=(
+        (u.get('first_name') or '') + ' ' + (u.get('last_name') or '')
+    ).strip() or (u.get('username') or 'کاربر'))
+
+
+@app.route('/api/public/<token>/charts')
+def api_public_charts_list(token: str):
+    """لیست تاپیک‌هایی که چارت فعال دارند برای این کاربر — بدون لاگین."""
+    u = db_user_by_public_token(token)
+    if not u:
+        return jsonify({'ok': False, 'msg': 'invalid token'}), 404
+    uid = int(u['tg_id'])
+    cfg = load_user_config(uid)
+    items = []
+    for g in cfg.get('groups') or []:
+        for t in g.get('topics') or []:
+            if not t.get('chart_enabled'):
+                continue
+            last = latest_rate(uid, g.get('id'), int(t.get('topic_id') or 0))
+            items.append({
+                'group_id': g.get('id'),
+                'group_title': g.get('title', ''),
+                'topic_id': int(t.get('topic_id') or 0),
+                'name': t.get('name', ''),
+                'chart_label': t.get('chart_label', '') or t.get('name', ''),
+                'chart_days': int(t.get('chart_days') or 7),
+                'last_value': last.get('value') if last else None,
+                'last_time': last.get('created_at') if last else None,
+            })
+    return jsonify({
+        'ok': True,
+        'owner': ((u.get('first_name') or '') + ' ' + (u.get('last_name') or '')).strip()
+                 or (u.get('username') or 'کاربر'),
+        'charts': items,
+    })
+
+
+@app.route('/api/public/<token>/charts/<group_id>/<int:topic_id>/data')
+def api_public_chart_data(token: str, group_id: str, topic_id: int):
+    u = db_user_by_public_token(token)
+    if not u:
+        return jsonify({'ok': False, 'msg': 'invalid token'}), 404
+    uid = int(u['tg_id'])
+    cfg = load_user_config(uid)
+    g = find_group(cfg, group_id) or {}
+    topic = None
+    for t in g.get('topics') or []:
+        if int(t.get('topic_id') or 0) == int(topic_id):
+            topic = t
+            break
+    if not topic or not topic.get('chart_enabled'):
+        return jsonify({'ok': False, 'msg': 'chart not public'}), 404
+    hours = int(request.args.get('hours', 168))
+    hours = max(1, min(hours, 24 * 90))
+    rates = get_rates(uid, group_id, topic_id, since_hours=hours)
+    last = latest_rate(uid, group_id, topic_id)
+    return jsonify({
+        'ok': True,
+        'topic_id': topic_id,
+        'group_id': group_id,
+        'topic_name': topic.get('name', ''),
+        'chart_label': topic.get('chart_label', '') or topic.get('name', ''),
+        'group_title': g.get('title', ''),
+        'rates': rates,
+        'latest': last,
+        'count': len(rates),
+        'hours': hours,
+    })
 
 
 @app.route('/api/forwarder/diag')
