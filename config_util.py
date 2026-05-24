@@ -66,6 +66,7 @@ def _norm_topic(t: dict) -> dict:
         'name': t.get('name', ''),
         'chart_enabled': bool(t.get('chart_enabled', False)),
         'chart_label': str(t.get('chart_label', '') or ''),
+        'skip_unchanged': bool(t.get('skip_unchanged', True)),
         'sources': [_norm_source(s) for s in (t.get('sources') or [])],
     }
 

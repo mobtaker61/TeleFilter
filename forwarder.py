@@ -21,7 +21,7 @@ from telethon.utils import get_peer_id
 
 from config_util import (
     normalize_config, record_forward,
-    parse_value, record_rate, get_rates,
+    parse_value, record_rate, get_rates, latest_rate,
     get_last_chart_msg, save_last_chart_msg,
 )
 # charts را lazy لود می‌کنیم تا اگر matplotlib در سرور دچار خطا شد،
@@ -123,6 +123,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                 continue
             chart_enabled = bool(t.get('chart_enabled', False))
             chart_label = str(t.get('chart_label') or t.get('name') or '')
+            skip_unchanged = bool(t.get('skip_unchanged', True))
             for s in t.get('sources') or []:
                 raw_chat = s.get('chat')
                 chat = raw_chat.strip() if isinstance(raw_chat, str) else raw_chat
@@ -145,6 +146,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'chart_enabled': chart_enabled,
                         'chart_label': chart_label,
                         'value_regex': value_regex,
+                        'skip_unchanged': skip_unchanged,
                     }
                     for k in _peer_keys(src_ent):
                         source_map.setdefault(k, []).append(route)
@@ -191,21 +193,34 @@ def _matches(text: str, filters: list) -> bool:
     return False
 
 
-async def _process_chart(uid: int, client, route: dict, target, raw_text: str):
+def _values_equal(a: float | None, b: float | None) -> bool:
+    """مقایسه‌ی دو float با tolerance بسیار کم (برای رفع خطای floating-point)."""
+    if a is None or b is None:
+        return False
+    return abs(a - b) < 1e-9
+
+
+async def _process_chart(
+    uid: int, client, route: dict, target, raw_text: str,
+    pre_parsed: tuple[float | None, str | None] | None = None,
+):
     """
     اگر برای این سورس chart فعال است:
-      1) عدد را با regex استخراج کن
+      1) عدد را با regex استخراج کن (اگر pre_parsed نداده شده)
       2) در DB ذخیره کن
       3) نمودار را رندر و ارسال کن، نمودار قبلی را حذف کن
     """
     gid = route['gid']
     tid = route['topic_id']
-    value_regex = route.get('value_regex') or None
-    value, raw_match = parse_value(raw_text, value_regex)
+    if pre_parsed is not None:
+        value, raw_match = pre_parsed
+    else:
+        value_regex = route.get('value_regex') or None
+        value, raw_match = parse_value(raw_text, value_regex)
     if value is None:
         logger.warning(
             "[%s] chart: regex match failed topic=%s regex=%r sample=%r",
-            uid, tid, value_regex, (raw_text or '')[:120],
+            uid, tid, route.get('value_regex'), (raw_text or '')[:120],
         )
         return
     record_rate(uid, gid, tid, value, raw_match or '', None)
@@ -306,6 +321,25 @@ def install_handler(uid: int, client):
             if not target:
                 logger.warning("[%s] no target for group=%s", uid, gid)
                 continue
+
+            # ── چک «نادیده گرفتن مقادیر تکراری» ──
+            # اگر چارت فعال است و skip_unchanged روشن و عدد قابل استخراج باشد:
+            #   اگر مقدار با آخرین مقدار ثبت‌شدهٔ این تاپیک یکسان است → کامل skip
+            #   (نه فوروارد، نه چارت)
+            pre_parsed = None
+            if route.get('chart_enabled') and route.get('skip_unchanged', True) and raw_text:
+                value_regex = route.get('value_regex') or None
+                v, raw_match = parse_value(raw_text, value_regex)
+                if v is not None:
+                    pre_parsed = (v, raw_match)
+                    last = latest_rate(uid, gid, tid)
+                    if last and _values_equal(float(last.get('value') or 0), v):
+                        logger.info(
+                            "[%s] skip unchanged: chat=%s topic=%s value=%s (= last)",
+                            uid, peer_id, tid, v,
+                        )
+                        continue
+
             try:
                 kwargs = {
                     'from_peer': event.chat_id,
@@ -329,7 +363,7 @@ def install_handler(uid: int, client):
 
             if route.get('chart_enabled') and raw_text:
                 try:
-                    await _process_chart(uid, client, route, target, raw_text)
+                    await _process_chart(uid, client, route, target, raw_text, pre_parsed=pre_parsed)
                 except Exception as e:
                     logger.error("[%s] chart pipeline failed: %s", uid, e)
 

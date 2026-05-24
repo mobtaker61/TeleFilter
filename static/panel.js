@@ -46,6 +46,7 @@ function buildCfgMapFromGroups(grps) {
         sources,
         chart_enabled: !!t.chart_enabled,
         chart_label: t.chart_label || '',
+        skip_unchanged: t.skip_unchanged !== false,
       };
     }
   }
@@ -65,9 +66,10 @@ function groupIsForum(g) {
 
 function ensureCfg() {
   const k = cfgKey(selGroupId, selTopicId);
-  if (!cfgMap[k]) cfgMap[k] = { sources: [], chart_enabled: false, chart_label: '' };
+  if (!cfgMap[k]) cfgMap[k] = { sources: [], chart_enabled: false, chart_label: '', skip_unchanged: true };
   if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
   if (cfgMap[k].chart_label === undefined) cfgMap[k].chart_label = '';
+  if (cfgMap[k].skip_unchanged === undefined) cfgMap[k].skip_unchanged = true;
   return cfgMap[k];
 }
 
@@ -818,6 +820,11 @@ function updateChartLabel(val) {
   markDirty();
 }
 
+function toggleSkipUnchanged(val) {
+  ensureCfg().skip_unchanged = !!val;
+  markDirty();
+}
+
 async function testSourceRegex(si) {
   const src = ensureCfg().sources[si];
   const sampleEl = document.getElementById(`regex_sample_${si}`);
@@ -1001,6 +1008,17 @@ function renderTopicDetail() {
           <label class="small text-muted mb-1">برچسب نمودار (نام واحد یا نرخ)</label>
           <input class="form-control form-control-sm" value="${esc(cfg.chart_label || '')}"
                  oninput="updateChartLabel(this.value)" placeholder="مثلاً: دلار به افغانی">
+
+          <label class="form-check form-switch mt-2 mb-0">
+            <input class="form-check-input" type="checkbox" id="skipUnchanged"
+                   ${cfg.skip_unchanged !== false ? 'checked' : ''}
+                   onchange="toggleSkipUnchanged(this.checked)">
+            <span class="form-check-label small">
+              <i class="bi bi-funnel text-warning me-1"></i>
+              نادیده گرفتن مقادیر تکراری (اگر عدد با آخرین مقدار یکسان بود، نه فوروارد و نه چارت)
+            </span>
+          </label>
+
           <div class="form-text small">
             <i class="bi bi-info-circle"></i>
             عبارت regex برای استخراج مقدار را در هر سورس جدا تنظیم کنید (پیام هر سورس فرمت خود را دارد).
@@ -1111,6 +1129,7 @@ async function saveAll() {
     name,
     chart_enabled: !!data.chart_enabled,
     chart_label: data.chart_label || '',
+    skip_unchanged: data.skip_unchanged !== false,
     sources: (data.sources || []).map(s => ({
       chat: s.chat || '',
       filters: s.filters || [],
