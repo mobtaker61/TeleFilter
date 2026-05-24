@@ -182,11 +182,8 @@ function renderChart(rates, label, mode) {
     },
     colors: ['#1e40af'],
     markers: {
-      size: mode === 'daily' ? 4 : 3,
-      colors: ['#fff'],
-      strokeColors: '#1e40af',
-      strokeWidth: 2,
-      hover: { sizeOffset: 3 },
+      size: 0,
+      hover: { size: 6, sizeOffset: 0 },
     },
     grid: { borderColor: '#e2e8f0', strokeDashArray: 3 },
     xaxis: {

@@ -177,7 +177,7 @@ function renderChart(gid, tid, rates, label, mode) {
       gradient: { shadeIntensity: 1, opacityFrom: .35, opacityTo: 0, stops: [0, 90, 100] },
     },
     colors: ['#1e40af'],
-    markers: { size: mode === 'daily' ? 3 : 0, colors: ['#fff'], strokeColors: '#1e40af', strokeWidth: 2 },
+    markers: { size: 0, hover: { size: 5 } },
     grid: { borderColor: '#e2e8f0', strokeDashArray: 3 },
     xaxis: {
       type: 'datetime',

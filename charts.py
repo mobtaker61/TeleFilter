@@ -98,10 +98,9 @@ def render_rate_chart(
     ys = [float(r['value']) for r in rates]
 
     fig, ax = plt.subplots(figsize=(8.5, 4.2), dpi=130)
-    ax.plot(xs, ys, color=accent, linewidth=2.2, marker='o', markersize=4,
-            markerfacecolor='white', markeredgewidth=1.6)
+    ax.plot(xs, ys, color=accent, linewidth=2.4)
 
-    ax.plot([xs[-1]], [ys[-1]], 'o', color=accent, markersize=9, zorder=5)
+    ax.plot([xs[-1]], [ys[-1]], 'o', color=accent, markersize=8, zorder=5)
     last = f"{ys[-1]:,.4f}".rstrip('0').rstrip('.') if ys[-1] % 1 else f"{int(ys[-1]):,}"
     ax.annotate(
         f' {last}',

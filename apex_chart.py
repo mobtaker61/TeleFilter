@@ -170,12 +170,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
       gradient: { shadeIntensity: 1, opacityFrom: .4, opacityTo: 0, stops: [0, 90, 100] },
     },
     colors: ['#1e40af'],
-    markers: {
-      size: MODE === 'daily' ? 5 : 3,
-      colors: ['#fff'],
-      strokeColors: '#1e40af',
-      strokeWidth: 2,
-    },
+    markers: { size: 0 },
     grid: { borderColor: '#e2e8f0', strokeDashArray: 3 },
     xaxis: {
       type: 'datetime',
