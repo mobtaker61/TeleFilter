@@ -125,6 +125,10 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
             chart_label = str(t.get('chart_label') or t.get('name') or '')
             skip_unchanged = bool(t.get('skip_unchanged', True))
             chart_days = int(t.get('chart_days') or 7)
+            try:
+                max_change_pct = float(t.get('max_change_percent', 10) or 0)
+            except (TypeError, ValueError):
+                max_change_pct = 10.0
             for s in t.get('sources') or []:
                 # سورس‌های غیرفعال کاملاً نادیده گرفته می‌شوند
                 if s.get('enabled') is False:
@@ -152,6 +156,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'value_regex': value_regex,
                         'skip_unchanged': skip_unchanged,
                         'chart_days': chart_days,
+                        'max_change_percent': max_change_pct,
                     }
                     for k in _peer_keys(src_ent):
                         source_map.setdefault(k, []).append(route)
@@ -328,23 +333,40 @@ def install_handler(uid: int, client):
                 logger.warning("[%s] no target for group=%s", uid, gid)
                 continue
 
-            # ── چک «نادیده گرفتن مقادیر تکراری» ──
-            # اگر چارت فعال است و skip_unchanged روشن و عدد قابل استخراج باشد:
-            #   اگر مقدار با آخرین مقدار ثبت‌شدهٔ این تاپیک یکسان است → کامل skip
-            #   (نه فوروارد، نه چارت)
+            # ── چک‌های اعتبارسنجی نرخ ──
+            # اگر چارت فعال است، عدد را یک بار parse می‌کنیم (cache pre_parsed)
+            # و سپس دو چک می‌کنیم:
+            #   ۱) skip_unchanged: مقدار == آخرین → کامل skip (نه فوروارد، نه چارت)
+            #   ۲) max_change_percent: تغییر بیش از حد → کامل skip (outlier ضد data corruption)
             pre_parsed = None
-            if route.get('chart_enabled') and route.get('skip_unchanged', True) and raw_text:
+            if route.get('chart_enabled') and raw_text:
                 value_regex = route.get('value_regex') or None
                 v, raw_match = parse_value(raw_text, value_regex)
                 if v is not None:
                     pre_parsed = (v, raw_match)
                     last = latest_rate(uid, gid, tid)
-                    if last and _values_equal(float(last.get('value') or 0), v):
+                    last_v = float(last.get('value') or 0) if last else None
+
+                    # چک ۱: مقدار تکراری
+                    if route.get('skip_unchanged', True) and last_v is not None and _values_equal(last_v, v):
                         logger.info(
                             "[%s] skip unchanged: chat=%s topic=%s value=%s (= last)",
                             uid, peer_id, tid, v,
                         )
                         continue
+
+                    # چک ۲: outlier (تغییر بیش از max_change_percent)
+                    max_pct = float(route.get('max_change_percent') or 0)
+                    if max_pct > 0 and last_v is not None and last_v != 0:
+                        change_pct = abs(v - last_v) / abs(last_v) * 100.0
+                        if change_pct > max_pct:
+                            direction = '↑' if v > last_v else '↓'
+                            logger.warning(
+                                "[%s] skip outlier: chat=%s topic=%s value=%s %s %.2f%% "
+                                "(last=%s, threshold=%.1f%%)",
+                                uid, peer_id, tid, v, direction, change_pct, last_v, max_pct,
+                            )
+                            continue
 
             try:
                 kwargs = {

@@ -72,6 +72,16 @@ def _norm_chart_days(v) -> int:
 
 
 def _norm_topic(t: dict) -> dict:
+    try:
+        max_change = float(t.get('max_change_percent', 10) or 0)
+    except (TypeError, ValueError):
+        max_change = 10.0
+    if max_change < 0:
+        max_change = 0.0
+    try:
+        order = int(t.get('chart_order', 0) or 0)
+    except (TypeError, ValueError):
+        order = 0
     return {
         'topic_id': t.get('topic_id'),
         'name': t.get('name', ''),
@@ -79,6 +89,8 @@ def _norm_topic(t: dict) -> dict:
         'chart_label': str(t.get('chart_label', '') or ''),
         'skip_unchanged': bool(t.get('skip_unchanged', True)),
         'chart_days': _norm_chart_days(t.get('chart_days', 7)),
+        'chart_order': order,
+        'max_change_percent': max_change,
         'sources': [_norm_source(s) for s in (t.get('sources') or [])],
     }
 

@@ -911,9 +911,12 @@ def api_public_charts_list(token: str):
                 'name': t.get('name', ''),
                 'chart_label': t.get('chart_label', '') or t.get('name', ''),
                 'chart_days': int(t.get('chart_days') or 7),
+                'chart_order': int(t.get('chart_order') or 0),
                 'last_value': last.get('value') if last else None,
                 'last_time': last.get('created_at') if last else None,
             })
+    # اولویت بالاتر (عدد کوچک‌تر) اول؛ سپس بر اساس نام برای ثبات
+    items.sort(key=lambda x: (x['chart_order'], x['chart_label']))
     return jsonify({
         'ok': True,
         'owner': ((u.get('first_name') or '') + ' ' + (u.get('last_name') or '')).strip()

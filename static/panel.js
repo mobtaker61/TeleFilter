@@ -49,6 +49,8 @@ function buildCfgMapFromGroups(grps) {
         chart_label: t.chart_label || '',
         skip_unchanged: t.skip_unchanged !== false,
         chart_days: [1, 3, 7, 15].includes(parseInt(t.chart_days)) ? parseInt(t.chart_days) : 7,
+        chart_order: Number.isFinite(parseInt(t.chart_order)) ? parseInt(t.chart_order) : 0,
+        max_change_percent: Number.isFinite(parseFloat(t.max_change_percent)) ? parseFloat(t.max_change_percent) : 10,
       };
     }
   }
@@ -68,11 +70,16 @@ function groupIsForum(g) {
 
 function ensureCfg() {
   const k = cfgKey(selGroupId, selTopicId);
-  if (!cfgMap[k]) cfgMap[k] = { sources: [], chart_enabled: false, chart_label: '', skip_unchanged: true, chart_days: 7 };
+  if (!cfgMap[k]) cfgMap[k] = {
+    sources: [], chart_enabled: false, chart_label: '',
+    skip_unchanged: true, chart_days: 7, chart_order: 0, max_change_percent: 10,
+  };
   if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
   if (cfgMap[k].chart_label === undefined) cfgMap[k].chart_label = '';
   if (cfgMap[k].skip_unchanged === undefined) cfgMap[k].skip_unchanged = true;
   if (!cfgMap[k].chart_days) cfgMap[k].chart_days = 7;
+  if (cfgMap[k].chart_order === undefined) cfgMap[k].chart_order = 0;
+  if (cfgMap[k].max_change_percent === undefined) cfgMap[k].max_change_percent = 10;
   return cfgMap[k];
 }
 
@@ -840,6 +847,18 @@ function updateChartDays(val) {
   markDirty();
 }
 
+function updateChartOrder(val) {
+  const v = parseInt(val);
+  ensureCfg().chart_order = Number.isFinite(v) ? v : 0;
+  markDirty();
+}
+
+function updateMaxChangePct(val) {
+  const v = parseFloat(val);
+  ensureCfg().max_change_percent = Number.isFinite(v) && v >= 0 ? v : 0;
+  markDirty();
+}
+
 async function testSourceRegex(si) {
   const src = ensureCfg().sources[si];
   const sampleEl = document.getElementById(`regex_sample_${si}`);
@@ -1091,6 +1110,34 @@ function renderTopicDetail() {
             </span>
           </label>
 
+          <div class="row g-2 mt-2 align-items-end">
+            <div class="col-6">
+              <label class="small text-muted mb-1">
+                <i class="bi bi-shield-check text-success me-1"></i>
+                حداکثر تغییر مجاز (٪)
+              </label>
+              <div class="input-group input-group-sm">
+                <input type="number" class="form-control" min="0" max="100" step="0.5"
+                       value="${cfg.max_change_percent ?? 10}"
+                       oninput="updateMaxChangePct(this.value)">
+                <span class="input-group-text">%</span>
+              </div>
+              <div class="form-text small">
+                عدد بیش از این حد نسبت به آخرین مقدار → کامل نادیده (۰ = غیرفعال)
+              </div>
+            </div>
+            <div class="col-6">
+              <label class="small text-muted mb-1">
+                <i class="bi bi-sort-numeric-down text-primary me-1"></i>
+                اولویت در صفحهٔ عمومی
+              </label>
+              <input type="number" class="form-control form-control-sm" step="1"
+                     value="${cfg.chart_order ?? 0}"
+                     oninput="updateChartOrder(this.value)">
+              <div class="form-text small">عدد کوچک‌تر = بالاتر در لیست</div>
+            </div>
+          </div>
+
           <div class="form-text small">
             <i class="bi bi-info-circle"></i>
             عبارت regex برای استخراج مقدار را در هر سورس جدا تنظیم کنید (پیام هر سورس فرمت خود را دارد).
@@ -1210,6 +1257,8 @@ async function saveAll() {
     chart_label: data.chart_label || '',
     skip_unchanged: data.skip_unchanged !== false,
     chart_days: [1, 3, 7, 15].includes(parseInt(data.chart_days)) ? parseInt(data.chart_days) : 7,
+    chart_order: Number.isFinite(parseInt(data.chart_order)) ? parseInt(data.chart_order) : 0,
+    max_change_percent: Number.isFinite(parseFloat(data.max_change_percent)) ? parseFloat(data.max_change_percent) : 10,
     sources: (data.sources || []).map(s => ({
       chat: s.chat || '',
       filters: s.filters || [],
