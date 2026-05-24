@@ -160,6 +160,15 @@ def _init_stats_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )''')
         c.execute('CREATE INDEX IF NOT EXISTS idx_rate_topic ON rate_history(user_id, group_id, topic_id, created_at)')
+        # message_id برای dedupe در backfill (افزایش به جداول قدیمی)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(rate_history)").fetchall()}
+        if 'message_id' not in cols:
+            c.execute('ALTER TABLE rate_history ADD COLUMN message_id INTEGER')
+        c.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS uq_rate_msg '
+            'ON rate_history(user_id, group_id, topic_id, source_peer, message_id) '
+            'WHERE message_id IS NOT NULL'
+        )
 
         c.execute('''CREATE TABLE IF NOT EXISTS chart_message (
             user_id INTEGER NOT NULL,
@@ -272,17 +281,29 @@ def parse_value(text: str, regex: str | None = None) -> tuple[float | None, str 
 #  Rate history
 # ══════════════════════════════════════════════════════════
 def record_rate(user_id: int, group_id: str, topic_id: int, value: float,
-                raw_text: str = '', source_peer: int | None = None):
+                raw_text: str = '', source_peer: int | None = None,
+                message_id: int | None = None, created_at: str | None = None) -> bool:
+    """
+    ثبت یک نرخ. اگر message_id داده شود و در ترکیب (user/group/topic/source/msg)
+    تکراری باشد، با INSERT OR IGNORE نادیده گرفته می‌شود.
+    خروجی: True اگر insert واقعی انجام شد، False اگر تکراری بود یا نامعتبر.
+    """
     if not user_id:
-        return
+        return False
     with sqlite3.connect(DB_PATH) as c:
-        c.execute(
-            'INSERT INTO rate_history (user_id, group_id, topic_id, value, raw_text, source_peer)'
-            ' VALUES (?,?,?,?,?,?)',
-            (user_id, group_id or '', int(topic_id), float(value), raw_text or '',
-             int(source_peer) if source_peer is not None else None),
+        cur = c.execute(
+            'INSERT OR IGNORE INTO rate_history '
+            ' (user_id, group_id, topic_id, value, raw_text, source_peer, message_id, created_at)'
+            ' VALUES (?,?,?,?,?,?,?, COALESCE(?, CURRENT_TIMESTAMP))',
+            (
+                user_id, group_id or '', int(topic_id), float(value), raw_text or '',
+                int(source_peer) if source_peer is not None else None,
+                int(message_id) if message_id is not None else None,
+                created_at,
+            ),
         )
         c.commit()
+        return cur.rowcount > 0
 
 
 def get_rates(user_id: int, group_id: str, topic_id: int, since_hours: int = 168, limit: int = 500) -> list[dict]:

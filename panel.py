@@ -1125,6 +1125,179 @@ def api_chart_test_send(group_id: str, topic_id: int):
         return jsonify({'ok': False, 'stage': 'send', 'msg': str(e)}), 500
 
 # ══════════════════════════════════════════════════════════
+#  Backfill — واکشی تاریخچه‌ی نرخ‌ها از یک سورس
+# ══════════════════════════════════════════════════════════
+# هر job در حافظه: {key: {status, progress, stats, error, future, cancel_flag}}
+# key = (uid, gid, tid, source_chat)
+_backfill_jobs: dict[tuple, dict] = {}
+
+
+def _bf_key(uid: int, gid: str, tid: int, src: str) -> tuple:
+    return (int(uid), str(gid), int(tid), str(src))
+
+
+@app.route('/api/backfill/start', methods=['POST'])
+@login_required
+def api_backfill_start():
+    """شروع backfill برای یک سورس مشخص از یک تاپیک.
+
+    body: { gid, tid, source_chat, days?, max_messages? }
+    """
+    uid = cur_uid()
+    data = request.get_json() or {}
+    gid = (data.get('gid') or '').strip()
+    try:
+        tid = int(data.get('tid') if data.get('tid') is not None else 0)
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'msg': 'tid نامعتبر'}), 400
+    src = (data.get('source_chat') or '').strip()
+    days = int(data.get('days') or 90)
+    max_msgs = int(data.get('max_messages') or 50000)
+    if not gid or not src:
+        return jsonify({'ok': False, 'msg': 'gid و source_chat الزامی است'}), 400
+
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'ok': False, 'msg': 'اتصال تلگرام برقرار نیست'}), 503
+
+    cfg = load_user_config(uid)
+    g = find_group(cfg, gid)
+    if not g:
+        return jsonify({'ok': False, 'msg': 'گروه یافت نشد'}), 404
+    src_obj = None
+    topic_obj = None
+    for t in (g.get('topics') or []):
+        if int(t.get('topic_id') or 0) == tid:
+            topic_obj = t
+            for s in (t.get('sources') or []):
+                if (s.get('chat') or '').strip() == src:
+                    src_obj = s
+                    break
+            break
+    if not src_obj or not topic_obj:
+        return jsonify({'ok': False, 'msg': 'سورس در این تاپیک یافت نشد'}), 404
+    if not (src_obj.get('value_regex') or '').strip():
+        return jsonify({'ok': False, 'msg': 'value_regex برای این سورس تنظیم نشده — بدون آن backfill بی‌معناست'}), 400
+
+    key = _bf_key(uid, gid, tid, src)
+    existing = _backfill_jobs.get(key)
+    if existing and existing.get('status') == 'running':
+        return jsonify({'ok': False, 'msg': 'این job در حال اجراست'}), 409
+
+    cancel_flag = {'stop': False}
+    state = {
+        'status': 'running',
+        'started_at': time.time(),
+        'progress': {},
+        'stats': None,
+        'error': None,
+        'days': days,
+        'max_messages': max_msgs,
+        'source_chat': src,
+        'gid': gid, 'tid': tid,
+        'cancel_flag': cancel_flag,
+    }
+    _backfill_jobs[key] = state
+
+    filters = src_obj.get('filters') or []
+    value_regex = src_obj.get('value_regex') or ''
+    clean = bool(src_obj.get('clean_text'))
+
+    async def _runner():
+        try:
+            stats = await fwd.backfill_source(
+                uid, c, src, gid, tid,
+                value_regex=value_regex,
+                filters=filters,
+                clean_text=clean,
+                since_days=days,
+                max_messages=max_msgs,
+                progress_cb=lambda p: state.update({'progress': p}),
+                is_cancelled=lambda: cancel_flag.get('stop', False),
+            )
+            state['stats'] = stats
+            state['status'] = 'cancelled' if stats.get('cancelled') else 'done'
+            state['progress'] = stats
+        except Exception as e:
+            state['status'] = 'error'
+            state['error'] = str(e)
+            _charts_log.error("[%s] backfill failed: %s", uid, e, exc_info=True)
+        finally:
+            state['finished_at'] = time.time()
+
+    fut = asyncio.run_coroutine_threadsafe(_runner(), _tg_loop)
+    state['future'] = fut
+    return jsonify({'ok': True, 'key': list(key)})
+
+
+def _bf_public(state: dict) -> dict:
+    """نسخه‌ی قابل serial دیکشنری state (بدون future / cancel_flag)."""
+    return {
+        'status': state.get('status'),
+        'progress': state.get('progress') or {},
+        'stats': state.get('stats'),
+        'error': state.get('error'),
+        'days': state.get('days'),
+        'max_messages': state.get('max_messages'),
+        'source_chat': state.get('source_chat'),
+        'started_at': state.get('started_at'),
+        'finished_at': state.get('finished_at'),
+    }
+
+
+@app.route('/api/backfill/status', methods=['GET'])
+@login_required
+def api_backfill_status():
+    """وضعیت یک job مشخص یا همه‌ی job های کاربر.
+
+    query: gid, tid, source_chat (همگی اختیاری — اگر باشد یکی برمی‌گرداند)
+    """
+    uid = cur_uid()
+    gid = (request.args.get('gid') or '').strip()
+    src = (request.args.get('source_chat') or '').strip()
+    tid_raw = request.args.get('tid')
+    if gid and src and tid_raw is not None:
+        try:
+            tid = int(tid_raw)
+        except ValueError:
+            return jsonify({'ok': False, 'msg': 'tid نامعتبر'}), 400
+        key = _bf_key(uid, gid, tid, src)
+        st = _backfill_jobs.get(key)
+        if not st:
+            return jsonify({'ok': True, 'state': None})
+        return jsonify({'ok': True, 'state': _bf_public(st)})
+    jobs = {}
+    for k, st in _backfill_jobs.items():
+        if k[0] != uid:
+            continue
+        jobs[f'{k[1]}|{k[2]}|{k[3]}'] = _bf_public(st)
+    return jsonify({'ok': True, 'jobs': jobs})
+
+
+@app.route('/api/backfill/cancel', methods=['POST'])
+@login_required
+def api_backfill_cancel():
+    uid = cur_uid()
+    data = request.get_json() or {}
+    gid = (data.get('gid') or '').strip()
+    src = (data.get('source_chat') or '').strip()
+    try:
+        tid = int(data.get('tid') if data.get('tid') is not None else 0)
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'msg': 'tid نامعتبر'}), 400
+    key = _bf_key(uid, gid, tid, src)
+    st = _backfill_jobs.get(key)
+    if not st:
+        return jsonify({'ok': False, 'msg': 'job یافت نشد'}), 404
+    if st.get('status') != 'running':
+        return jsonify({'ok': False, 'msg': 'این job در حال اجرا نیست'}), 409
+    flag = st.get('cancel_flag')
+    if flag:
+        flag['stop'] = True
+    return jsonify({'ok': True})
+
+
+# ══════════════════════════════════════════════════════════
 #  Routes — API: Auth (Telegram login from panel)
 # ══════════════════════════════════════════════════════════
 def _finish_telethon_login(uid: int):

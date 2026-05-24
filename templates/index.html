@@ -200,6 +200,20 @@
       font-size: .82rem; }
     .src-regex label { font-weight: 500; }
     .regex-test textarea { resize: vertical; min-height: 38px; }
+    .bf-box { background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px;
+      padding: .6rem .8rem; margin-top: .7rem; font-size: .8rem; }
+    .bf-box .bf-title { display: flex; align-items: center; gap: .4rem; color: #475569;
+      font-weight: 500; margin-bottom: .4rem; }
+    .bf-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: .35rem .8rem; font-family: 'JetBrains Mono', 'Vazirmatn', monospace; font-size: .73rem;
+      color: #334155; }
+    .bf-stats b { color: #0f172a; }
+    .bf-progress { height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin: .35rem 0; }
+    .bf-progress > div { height: 100%; background: linear-gradient(90deg, #3b82f6, #6366f1);
+      width: 0; transition: width .4s; }
+    .bf-status-done    { color: #16a34a; }
+    .bf-status-error   { color: #dc2626; }
+    .bf-status-cancelled { color: #ca8a04; }
 
     /* ── Modals ───────────────────────────────── */
     .modal-content { border-radius: 16px; border: none; box-shadow: 0 20px 60px rgba(0,0,0,.15); }
@@ -752,6 +766,60 @@
             <i class="bi bi-arrow-repeat"></i> لینک جدید بساز
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Backfill Modal ═════════════════════════════════════ -->
+<div class="modal fade" id="backfillModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">
+          <i class="bi bi-download me-2" style="color:#0891b2"></i> بازیابی تاریخچهٔ نرخ‌ها
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="bfModalSi">
+        <div class="alert alert-info py-2 small mb-3">
+          <i class="bi bi-info-circle me-1"></i>
+          تمام پیام‌های این سورس تا چند روز گذشته اسکن می‌شوند و نرخ‌های قابل استخراج
+          با timestamp واقعی پیام در آرشیو ذخیره می‌شوند. رکوردهای تکراری (بر اساس message_id)
+          نادیده گرفته می‌شوند پس می‌توانید هر زمان دوباره بزنید.
+        </div>
+        <div class="mb-3">
+          <label class="form-label">سورس</label>
+          <input type="text" class="form-control" id="bfModalSrc" readonly dir="ltr">
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">بازه (روز)</label>
+            <select class="form-control" id="bfModalDays">
+              <option value="30">۳۰ روز (۱ ماه)</option>
+              <option value="60">۶۰ روز (۲ ماه)</option>
+              <option value="90" selected>۹۰ روز (۳ ماه)</option>
+              <option value="180">۱۸۰ روز (۶ ماه)</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">حداکثر پیام</label>
+            <input type="number" class="form-control" id="bfModalMax" value="50000" min="100" max="200000">
+            <small class="text-muted">محافظت در برابر کانال‌های پرحجم</small>
+          </div>
+        </div>
+        <div class="alert alert-warning py-2 small mt-3 mb-0">
+          <i class="bi bi-shield-exclamation me-1"></i>
+          <b>توجه:</b> بسته به حجم سورس ممکن است چند دقیقه طول بکشد. می‌توانید پنل را
+          باز نگه دارید — وضعیت زیر کارت سورس به‌روزرسانی می‌شود.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">انصراف</button>
+        <button type="button" class="btn btn-primary" onclick="startBackfillFromModal()">
+          <i class="bi bi-play-fill me-1"></i> شروع
+        </button>
       </div>
     </div>
   </div>

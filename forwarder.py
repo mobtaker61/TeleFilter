@@ -436,3 +436,166 @@ async def rebuild_and_install(uid: int, client, cfg: dict):
     """ترکیبی: build routes + install handler — برای فراخوانی پس از connect یا save config."""
     await build_routes(uid, client, cfg)
     install_handler(uid, client)
+
+
+# ══════════════════════════════════════════════════════════
+#  Backfill: واکشی تاریخچه‌ی پیام‌های یک سورس و ثبت نرخ‌ها
+# ══════════════════════════════════════════════════════════
+async def backfill_source(
+    uid: int,
+    client,
+    source_chat,
+    gid: str,
+    topic_id: int,
+    *,
+    value_regex: str = '',
+    filters: list | None = None,
+    clean_text: bool = False,
+    since_days: int = 90,
+    max_messages: int = 50000,
+    sleep_every: int = 250,
+    sleep_seconds: float = 0.8,
+    progress_cb=None,
+    is_cancelled=None,
+) -> dict:
+    """
+    تاریخچه‌ی یک سورس را تا `since_days` روز عقب اسکن می‌کند و نرخ‌های قابل
+    استخراج را با timestamp اصلی پیام (UTC) و message_id در DB ثبت می‌کند.
+    Dedupe با INSERT OR IGNORE روی (uid, gid, tid, source_peer, message_id).
+
+    skip_unchanged و max_change_percent در backfill اعمال نمی‌شوند تا داده‌ی
+    تاریخی کامل بماند (مسئولیت آن‌ها فقط برای live است).
+
+    Returns:
+        dict با کلیدهای: seen, inserted, duplicate, filtered, parse_fail,
+        elapsed, floodwait_total, oldest, newest, cancelled
+    """
+    from datetime import datetime, timezone, timedelta
+    from telethon.errors import FloodWaitError
+
+    started = time.monotonic()
+    filters = filters or []
+    entity = await client.get_entity(source_chat)
+    peer = int(get_peer_id(entity))
+
+    now_utc = datetime.now(timezone.utc)
+    stop_at = now_utc - timedelta(days=int(since_days))
+
+    seen = inserted = duplicate = filtered = parse_fail = 0
+    floodwait_total = 0
+    oldest_iso: str | None = None
+    newest_iso: str | None = None
+    cancelled = False
+    last_msg_id_for_resume: int | None = None
+
+    def _report():
+        if progress_cb:
+            try:
+                progress_cb({
+                    'seen': seen,
+                    'inserted': inserted,
+                    'duplicate': duplicate,
+                    'filtered': filtered,
+                    'parse_fail': parse_fail,
+                    'floodwait_total': floodwait_total,
+                    'oldest': oldest_iso,
+                    'newest': newest_iso,
+                    'elapsed': round(time.monotonic() - started, 1),
+                })
+            except Exception:
+                pass
+
+    async def _iterate(offset_id: int = 0):
+        nonlocal seen, inserted, duplicate, filtered, parse_fail
+        nonlocal oldest_iso, newest_iso, last_msg_id_for_resume, cancelled
+        kwargs: dict[str, Any] = {'limit': None}
+        if offset_id:
+            kwargs['offset_id'] = offset_id
+        async for msg in client.iter_messages(entity, **kwargs):
+            if is_cancelled and is_cancelled():
+                cancelled = True
+                return
+            if msg.date is None:
+                continue
+            if msg.date < stop_at:
+                return
+            seen += 1
+            last_msg_id_for_resume = int(msg.id)
+            iso = msg.date.isoformat()
+            if newest_iso is None:
+                newest_iso = iso
+            oldest_iso = iso
+
+            text = (msg.message or msg.text or getattr(msg, 'raw_text', '') or '').strip()
+            if not text:
+                if seen % 50 == 0:
+                    _report()
+                if seen >= max_messages:
+                    return
+                continue
+
+            if filters and not _matches(text.lower(), filters):
+                filtered += 1
+            else:
+                cleaned = _clean_text(text) if clean_text else text
+                v, raw = parse_value(cleaned, value_regex or None)
+                if v is None:
+                    parse_fail += 1
+                else:
+                    ok = record_rate(
+                        uid, gid, int(topic_id), v, raw or '', peer,
+                        message_id=int(msg.id),
+                        created_at=msg.date.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+                    )
+                    if ok:
+                        inserted += 1
+                    else:
+                        duplicate += 1
+
+            if seen % 50 == 0:
+                _report()
+            if sleep_every and seen and seen % sleep_every == 0:
+                await asyncio.sleep(sleep_seconds)
+            if seen >= max_messages:
+                return
+
+    try:
+        offset_id = 0
+        while True:
+            try:
+                await _iterate(offset_id=offset_id)
+                break
+            except FloodWaitError as e:
+                wait = int(getattr(e, 'seconds', 30) or 30) + 3
+                floodwait_total += wait
+                logger.warning(
+                    "[%s] backfill FloodWait %ds — sleeping (seen=%d inserted=%d)",
+                    uid, wait, seen, inserted,
+                )
+                _report()
+                await asyncio.sleep(wait)
+                offset_id = last_msg_id_for_resume or 0
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
+    finally:
+        _report()
+
+    elapsed = round(time.monotonic() - started, 1)
+    result = {
+        'seen': seen,
+        'inserted': inserted,
+        'duplicate': duplicate,
+        'filtered': filtered,
+        'parse_fail': parse_fail,
+        'floodwait_total': floodwait_total,
+        'oldest': oldest_iso,
+        'newest': newest_iso,
+        'elapsed': elapsed,
+        'cancelled': cancelled,
+    }
+    logger.info(
+        "[%s] backfill done src=%s topic=%s: %s",
+        uid, source_chat, topic_id, result,
+    )
+    return result

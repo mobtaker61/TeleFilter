@@ -897,6 +897,151 @@ function openChartPage() {
   window.open(`/chart/${encodeURIComponent(selGroupId)}/${selTopicId}`, '_blank');
 }
 
+// ─── Backfill: واکشی تاریخچه‌ی یک سورس ───────────────────────
+const _bfPollers = {}; // {si: intervalId}
+
+function openBackfill(si) {
+  const src = ensureCfg().sources[si];
+  if (!src || !(src.chat || '').trim()) {
+    showToast('ابتدا chat سورس را وارد کنید', 'warning');
+    return;
+  }
+  if (!(src.value_regex || '').trim()) {
+    showToast('برای backfill باید value_regex این سورس تنظیم باشد', 'warning');
+    return;
+  }
+  document.getElementById('bfModalSrc').textContent = src.chat;
+  document.getElementById('bfModalDays').value = '90';
+  document.getElementById('bfModalMax').value = '50000';
+  document.getElementById('bfModalSi').value = String(si);
+  if (window.bootstrap?.Modal) {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('backfillModal')).show();
+  }
+}
+
+async function startBackfillFromModal() {
+  const si = parseInt(document.getElementById('bfModalSi').value);
+  const days = Math.max(1, Math.min(180, parseInt(document.getElementById('bfModalDays').value) || 90));
+  const maxMsgs = Math.max(100, Math.min(200000, parseInt(document.getElementById('bfModalMax').value) || 50000));
+  const src = ensureCfg().sources[si];
+  if (!src) return;
+  try {
+    const r = await fetch('/api/backfill/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        gid: selGroupId, tid: selTopicId, source_chat: src.chat,
+        days, max_messages: maxMsgs,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) { showToast(d.msg || 'خطا', 'danger'); return; }
+    if (window.bootstrap?.Modal) {
+      bootstrap.Modal.getInstance(document.getElementById('backfillModal'))?.hide();
+    }
+    showToast('Backfill شروع شد', 'success');
+    _renderBfBox(si, { status: 'running', progress: {} });
+    _startBfPolling(si, src.chat);
+  } catch {
+    showToast('خطای شبکه', 'danger');
+  }
+}
+
+function _bfBoxEl(si) {
+  return document.getElementById(`bf_box_${si}`);
+}
+
+function _renderBfBox(si, state) {
+  const el = _bfBoxEl(si);
+  if (!el) return;
+  el.classList.remove('d-none');
+  const st = state.status || 'idle';
+  const p = state.progress || {};
+  const stats = state.stats || {};
+  const seen = p.seen ?? stats.seen ?? 0;
+  const inserted = p.inserted ?? stats.inserted ?? 0;
+  const duplicate = p.duplicate ?? stats.duplicate ?? 0;
+  const filtered = p.filtered ?? stats.filtered ?? 0;
+  const parseFail = p.parse_fail ?? stats.parse_fail ?? 0;
+  const oldest = (p.oldest ?? stats.oldest ?? '').slice(0, 19).replace('T', ' ');
+  const elapsed = (p.elapsed ?? stats.elapsed ?? 0);
+  const fw = (p.floodwait_total ?? stats.floodwait_total ?? 0);
+  const maxMsgs = state.max_messages || 50000;
+  const pct = Math.min(100, Math.round((seen / maxMsgs) * 100));
+  const statusBadge = st === 'running'
+    ? '<span class="text-primary"><i class="bi bi-arrow-repeat spin"></i> در حال اجرا</span>'
+    : st === 'done'
+      ? '<span class="bf-status-done"><i class="bi bi-check-circle"></i> تکمیل شد</span>'
+      : st === 'cancelled'
+        ? '<span class="bf-status-cancelled"><i class="bi bi-slash-circle"></i> لغو شد</span>'
+        : st === 'error'
+          ? `<span class="bf-status-error"><i class="bi bi-x-circle"></i> خطا: ${esc(state.error || '')}</span>`
+          : '';
+  el.innerHTML = `
+    <div class="bf-title">
+      <i class="bi bi-download"></i> Backfill ${statusBadge}
+      ${st === 'running' ? `<button class="btn btn-sm btn-outline-warning ms-auto" onclick="cancelBackfill(${si})">
+        <i class="bi bi-stop-fill"></i> لغو</button>` : ''}
+    </div>
+    <div class="bf-progress"><div style="width:${pct}%"></div></div>
+    <div class="bf-stats">
+      <div>دیده: <b>${seen.toLocaleString('fa')}</b></div>
+      <div>ثبت‌شده: <b class="text-success">${inserted.toLocaleString('fa')}</b></div>
+      <div>تکراری: <b>${duplicate.toLocaleString('fa')}</b></div>
+      <div>فیلتر: <b>${filtered.toLocaleString('fa')}</b></div>
+      <div>parse fail: <b>${parseFail.toLocaleString('fa')}</b></div>
+      <div>زمان: <b>${elapsed}s</b></div>
+      ${fw ? `<div>FloodWait: <b>${fw}s</b></div>` : ''}
+      ${oldest ? `<div>قدیمی‌ترین: <b dir="ltr">${esc(oldest)}</b></div>` : ''}
+    </div>`;
+}
+
+function _startBfPolling(si, srcChat) {
+  if (_bfPollers[si]) clearInterval(_bfPollers[si]);
+  _bfPollers[si] = setInterval(async () => {
+    try {
+      const q = new URLSearchParams({ gid: selGroupId, tid: String(selTopicId), source_chat: srcChat });
+      const d = await (await fetch('/api/backfill/status?' + q.toString())).json();
+      if (!d.ok || !d.state) return;
+      _renderBfBox(si, d.state);
+      if (d.state.status !== 'running') {
+        clearInterval(_bfPollers[si]);
+        delete _bfPollers[si];
+        if (d.state.status === 'done') {
+          showToast(`Backfill انجام شد — ${(d.state.stats?.inserted || 0).toLocaleString('fa')} نرخ جدید ثبت شد`, 'success');
+        }
+      }
+    } catch { /* network — try again next tick */ }
+  }, 2000);
+}
+
+async function cancelBackfill(si) {
+  const src = ensureCfg().sources[si];
+  if (!src) return;
+  try {
+    await fetch('/api/backfill/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gid: selGroupId, tid: selTopicId, source_chat: src.chat }),
+    });
+  } catch { /* noop */ }
+}
+
+// در زمان رندر تاپیک، job های running موجود را restore کن
+async function _restoreBackfillStates() {
+  try {
+    const d = await (await fetch('/api/backfill/status')).json();
+    if (!d.ok || !d.jobs) return;
+    const cfg = ensureCfg();
+    Object.entries(d.jobs).forEach(([k, st]) => {
+      const [gid, tid, src] = k.split('|');
+      if (gid !== String(selGroupId) || tid !== String(selTopicId)) return;
+      const si = (cfg.sources || []).findIndex(s => (s.chat || '').trim() === src);
+      if (si < 0) return;
+      _renderBfBox(si, st);
+      if (st.status === 'running') _startBfPolling(si, src);
+    });
+  } catch { /* noop */ }
+}
+
 async function testChartSend() {
   if (!selGroupId || selTopicId === null || selTopicId === undefined) return;
   const btn = document.getElementById('btnTestChart');
@@ -1209,6 +1354,16 @@ function renderTopicDetail() {
                 <span id="regex_out_${si}" class="small"></span>
               </div>
             </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+              <small class="text-muted">
+                <i class="bi bi-clock-history me-1"></i>
+                بازیابی تاریخچه از این سورس (تا ۳ ماه گذشته):
+              </small>
+              <button class="btn btn-sm btn-outline-info" onclick="openBackfill(${si})">
+                <i class="bi bi-download me-1"></i> بازیابی تاریخچه
+              </button>
+            </div>
+            <div id="bf_box_${si}" class="bf-box d-none"></div>
           </div>` : ''}
       </div>`;
     }).join('')
@@ -1216,6 +1371,8 @@ function renderTopicDetail() {
     <button class="btn-add-src mt-2" onclick="addSource()"><i class="bi bi-plus-circle"></i> سورس جدید</button>
     <p class="text-warning mt-3 mb-0" style="font-size:.78rem"><i class="bi bi-exclamation-triangle me-1"></i>
       پس از تغییرات حتماً <strong>ذخیره تغییرات</strong> را بزنید تا فوروارد و نمودار به‌روز شوند.</p>`;
+  // پس از رندر، job های در حال اجرا را restore کن (تا اگر کاربر صفحه را عوض کرد و برگشت، progress ادامه پیدا کند)
+  setTimeout(() => { try { _restoreBackfillStates(); } catch {} }, 50);
 }
 
 function goHome() {
