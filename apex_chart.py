@@ -111,8 +111,8 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700&display=swap');
   *, *::before, *::after { box-sizing: border-box; font-family: 'Vazirmatn', sans-serif; }
-  body { margin: 0; padding: 18px 22px; background: #ffffff; }
-  .wrap { width: 920px; }
+  body { margin: 0; padding: 0; background: #ffffff; }
+  .wrap { width: 960px; padding: 18px 22px; background: #ffffff; }
   .hdr { display: flex; justify-content: space-between; align-items: flex-end;
     margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1.5px solid #e2e8f0; }
   .ttl { font-size: 22px; font-weight: 700; color: #1e293b; }
@@ -124,7 +124,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     font-size: 10px; font-weight: 600; margin-right: 6px; }
   .badge.raw   { background: #dcfce7; color: #166534; }
   .badge.daily { background: #fef3c7; color: #854d0e; }
-  #chart { width: 920px; height: 420px; }
+  #chart { width: 100%; height: 420px; }
   .ftr { font-size: 10px; color: #94a3b8; text-align: center; margin-top: 8px; }
 </style>
 </head>
@@ -261,7 +261,7 @@ async def render_chart_png(
 
     html = _build_html(rates, title, mode, days)
     try:
-        ctx = await _browser.new_context(viewport={'width': 980, 'height': 540})
+        ctx = await _browser.new_context(viewport={'width': 1000, 'height': 560})
         page = await ctx.new_page()
         try:
             await page.set_content(html, wait_until='load', timeout=timeout_ms)
