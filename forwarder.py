@@ -131,6 +131,8 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
             except (TypeError, ValueError):
                 continue
             chart_enabled = bool(t.get('chart_enabled', False))
+            forward_enabled = bool(t.get('forward_enabled', True))
+            chart_message_enabled = bool(t.get('chart_message_enabled', True))
             chart_label = str(t.get('chart_label') or t.get('name') or '')
             skip_unchanged = bool(t.get('skip_unchanged', True))
             chart_days = int(t.get('chart_days') or 7)
@@ -161,6 +163,8 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'filters': filters,
                         'is_forum': bool(is_forum),
                         'chart_enabled': chart_enabled,
+                        'forward_enabled': forward_enabled,
+                        'chart_message_enabled': chart_message_enabled,
                         'chart_label': chart_label,
                         'value_regex': value_regex,
                         'skip_unchanged': skip_unchanged,
@@ -254,6 +258,7 @@ async def _process_chart(
     uid: int, client, route: dict, target, raw_text: str,
     pre_parsed: tuple[float | None, str | None] | None = None,
     previous_value: float | None = None,
+    record_value: bool = True,
 ):
     """
     اگر برای این سورس chart فعال است:
@@ -275,8 +280,9 @@ async def _process_chart(
             uid, tid, route.get('value_regex'), (raw_text or '')[:120],
         )
         return
-    record_rate(uid, gid, tid, value, raw_match or '', None)
-    logger.info("[%s] chart: value=%s recorded topic=%s", uid, value, tid)
+    if record_value:
+        record_rate(uid, gid, tid, value, raw_match or '', None)
+        logger.info("[%s] chart: value=%s recorded topic=%s", uid, value, tid)
 
     days = int(route.get('chart_days') or 7)
     title = route.get('chart_label') or f"Topic {tid}"
@@ -395,7 +401,9 @@ def install_handler(uid: int, client):
             tid = route['topic_id']
             use_topic = route.get('is_forum') and tid > 0
             target = targets.get(gid)
-            if not target:
+            wants_forward = route.get('forward_enabled', True)
+            wants_chart_message = bool(route.get('chart_enabled')) and route.get('chart_message_enabled', True)
+            if (wants_forward or wants_chart_message) and not target:
                 logger.warning("[%s] no target for group=%s", uid, gid)
                 continue
 
@@ -406,12 +414,16 @@ def install_handler(uid: int, client):
             #   ۲) max_change_percent: تغییر بیش از حد → کامل skip (outlier ضد data corruption)
             pre_parsed = None
             prev_value_for_caption: float | None = None
+            parsed_value: float | None = None
+            parsed_raw_match: str | None = None
             if route.get('chart_enabled') and raw_text:
                 value_regex = route.get('value_regex') or None
                 text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
                 v, raw_match = parse_value(text_for_parse, value_regex)
                 if v is not None:
                     pre_parsed = (v, raw_match)
+                    parsed_value = v
+                    parsed_raw_match = raw_match
                     last = latest_rate(uid, gid, tid)
                     last_v = float(last.get('value') or 0) if last else None
                     prev_value_for_caption = last_v
@@ -437,33 +449,47 @@ def install_handler(uid: int, client):
                             )
                             continue
 
-            try:
-                kwargs = {
-                    'from_peer': event.chat_id,
-                    'id': [event.message.id],
-                    'to_peer': target,
-                    'random_id': [random.randint(1, 2**63 - 1)],
-                }
-                if use_topic:
-                    kwargs['top_msg_id'] = tid
-                await client(ForwardMessagesRequest(**kwargs))
-                record_forward(uid, gid, tid if use_topic else 0, peer_id)
-                logger.info(
-                    "[%s] forwarded chat=%s msg=%s → group=%s topic=%s",
-                    uid, peer_id, event.message.id, gid, tid if use_topic else '-',
+            if route.get('chart_enabled') and parsed_value is not None:
+                inserted = record_rate(
+                    uid, gid, tid, parsed_value,
+                    parsed_raw_match or '', None,
                 )
-            except Exception as e:
-                err = f"forward fail (chat={peer_id} group={gid} topic={tid}): {e}"
-                _last_error[uid] = err
-                logger.error("[%s] %s", uid, err)
-                continue
+                logger.info(
+                    "[%s] chart: value=%s %s topic=%s",
+                    uid, parsed_value, "recorded" if inserted else "duplicate/ignored", tid,
+                )
 
-            if route.get('chart_enabled') and raw_text:
+            if wants_forward:
+                try:
+                    kwargs = {
+                        'from_peer': event.chat_id,
+                        'id': [event.message.id],
+                        'to_peer': target,
+                        'random_id': [random.randint(1, 2**63 - 1)],
+                    }
+                    if use_topic:
+                        kwargs['top_msg_id'] = tid
+                    await client(ForwardMessagesRequest(**kwargs))
+                    record_forward(uid, gid, tid if use_topic else 0, peer_id)
+                    logger.info(
+                        "[%s] forwarded chat=%s msg=%s → group=%s topic=%s",
+                        uid, peer_id, event.message.id, gid, tid if use_topic else '-',
+                    )
+                except Exception as e:
+                    err = f"forward fail (chat={peer_id} group={gid} topic={tid}): {e}"
+                    _last_error[uid] = err
+                    logger.error("[%s] %s", uid, err)
+                    continue
+            else:
+                logger.info("[%s] forward disabled: chat=%s topic=%s", uid, peer_id, tid)
+
+            if wants_chart_message and raw_text:
                 try:
                     await _process_chart(
                         uid, client, route, target, raw_text,
                         pre_parsed=pre_parsed,
                         previous_value=prev_value_for_caption,
+                        record_value=False,
                     )
                 except Exception as e:
                     logger.error("[%s] chart pipeline failed: %s", uid, e)

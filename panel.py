@@ -913,7 +913,7 @@ def api_public_charts_list(token: str):
     items = []
     for g in cfg.get('groups') or []:
         for t in g.get('topics') or []:
-            if not t.get('chart_enabled'):
+            if not t.get('chart_enabled') or not t.get('public_chart_enabled', t.get('chart_enabled')):
                 continue
             last, prev = latest_two_rates(uid, g.get('id'), int(t.get('topic_id') or 0))
             change = compute_change(
@@ -956,7 +956,11 @@ def api_public_chart_data(token: str, group_id: str, topic_id: int):
         if int(t.get('topic_id') or 0) == int(topic_id):
             topic = t
             break
-    if not topic or not topic.get('chart_enabled'):
+    if (
+        not topic
+        or not topic.get('chart_enabled')
+        or not topic.get('public_chart_enabled', topic.get('chart_enabled'))
+    ):
         return jsonify({'ok': False, 'msg': 'chart not public'}), 404
     hours = int(request.args.get('hours', 168))
     hours = max(1, min(hours, 24 * 180))
@@ -999,6 +1003,8 @@ def fwd_diag():
                 'topic_id': r.get('topic_id') if r.get('is_forum') else None,
                 'filters': r.get('filters') or [],
                 'chart_enabled': bool(r.get('chart_enabled')),
+                'forward_enabled': bool(r.get('forward_enabled', True)),
+                'chart_message_enabled': bool(r.get('chart_message_enabled', True)),
                 'value_regex': r.get('value_regex') or '',
                 'chart_label': r.get('chart_label') or '',
             })
@@ -1052,6 +1058,8 @@ def api_chart_status():
                 'topic_id': t.get('topic_id'),
                 'name': t.get('name', ''),
                 'chart_label': t.get('chart_label', '') or '',
+                'chart_message_enabled': bool(t.get('chart_message_enabled', True)),
+                'public_chart_enabled': bool(t.get('public_chart_enabled', t.get('chart_enabled'))),
                 'sources': srcs,
             })
     return jsonify({

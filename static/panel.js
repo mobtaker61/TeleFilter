@@ -47,6 +47,9 @@ function buildCfgMapFromGroups(grps) {
       m[cfgKey(g.id, t.topic_id)] = {
         sources,
         chart_enabled: !!t.chart_enabled,
+        forward_enabled: t.forward_enabled !== false,
+        chart_message_enabled: t.chart_message_enabled !== false,
+        public_chart_enabled: t.public_chart_enabled !== false && !!t.chart_enabled,
         chart_label: t.chart_label || '',
         skip_unchanged: t.skip_unchanged !== false,
         chart_days: [1, 3, 7, 15].includes(parseInt(t.chart_days)) ? parseInt(t.chart_days) : 7,
@@ -73,9 +76,13 @@ function ensureCfg() {
   const k = cfgKey(selGroupId, selTopicId);
   if (!cfgMap[k]) cfgMap[k] = {
     sources: [], chart_enabled: false, chart_label: '',
+    forward_enabled: true, chart_message_enabled: true, public_chart_enabled: false,
     skip_unchanged: true, chart_days: 7, chart_order: 0, max_change_percent: 10,
   };
   if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
+  if (cfgMap[k].forward_enabled === undefined) cfgMap[k].forward_enabled = true;
+  if (cfgMap[k].chart_message_enabled === undefined) cfgMap[k].chart_message_enabled = true;
+  if (cfgMap[k].public_chart_enabled === undefined) cfgMap[k].public_chart_enabled = !!cfgMap[k].chart_enabled;
   if (cfgMap[k].chart_label === undefined) cfgMap[k].chart_label = '';
   if (cfgMap[k].skip_unchanged === undefined) cfgMap[k].skip_unchanged = true;
   if (!cfgMap[k].chart_days) cfgMap[k].chart_days = 7;
@@ -833,7 +840,24 @@ function toggleSourceEnabled(si, val) {
 
 function toggleChartEnabled(val) {
   ensureCfg().chart_enabled = !!val;
+  if (!val) ensureCfg().public_chart_enabled = false;
+  else if (ensureCfg().public_chart_enabled === undefined) ensureCfg().public_chart_enabled = true;
   renderTopicDetail();
+  markDirty();
+}
+
+function toggleForwardEnabled(val) {
+  ensureCfg().forward_enabled = !!val;
+  markDirty();
+}
+
+function toggleChartMessageEnabled(val) {
+  ensureCfg().chart_message_enabled = !!val;
+  markDirty();
+}
+
+function togglePublicChartEnabled(val) {
+  ensureCfg().public_chart_enabled = !!val;
   markDirty();
 }
 
@@ -1206,6 +1230,9 @@ function renderTopicDetail() {
   const cfg = ensureCfg();
   const sources = cfg.sources;
   const chartOn = !!cfg.chart_enabled;
+  const forwardOn = cfg.forward_enabled !== false;
+  const chartMsgOn = cfg.chart_message_enabled !== false;
+  const publicChartOn = cfg.public_chart_enabled !== false && chartOn;
 
   detail.innerHTML = `
     <div class="topic-hdr">
@@ -1224,7 +1251,7 @@ function renderTopicDetail() {
           <input class="form-check-input" type="checkbox" id="chartEnabled" ${chartOn ? 'checked' : ''}
                  onchange="toggleChartEnabled(this.checked)">
           <span class="form-check-label fw-bold">
-            <i class="bi bi-graph-up-arrow text-primary me-1"></i> نمودار نرخ این تاپیک
+            <i class="bi bi-graph-up-arrow text-primary me-1"></i> استخراج و ثبت نرخ این تاپیک
           </span>
         </label>
         ${chartOn ? `<button class="btn btn-sm btn-outline-primary" onclick="openChartPage()">
@@ -1232,6 +1259,36 @@ function renderTopicDetail() {
       </div>
       ${chartOn ? `
         <div class="chart-fields">
+          <div class="row g-2 mb-3">
+            <div class="col-md-4">
+              <label class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" ${forwardOn ? 'checked' : ''}
+                       onchange="toggleForwardEnabled(this.checked)">
+                <span class="form-check-label small">
+                  <i class="bi bi-send text-primary me-1"></i> فوروارد پیام به گروه
+                </span>
+              </label>
+            </div>
+            <div class="col-md-4">
+              <label class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" ${chartMsgOn ? 'checked' : ''}
+                       onchange="toggleChartMessageEnabled(this.checked)">
+                <span class="form-check-label small">
+                  <i class="bi bi-image text-success me-1"></i> ارسال تصویر نمودار به گروه
+                </span>
+              </label>
+            </div>
+            <div class="col-md-4">
+              <label class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" ${publicChartOn ? 'checked' : ''}
+                       onchange="togglePublicChartEnabled(this.checked)">
+                <span class="form-check-label small">
+                  <i class="bi bi-globe2 text-info me-1"></i> نمایش در صفحه عمومی
+                </span>
+              </label>
+            </div>
+          </div>
+
           <label class="small text-muted mb-1">برچسب نمودار (نام واحد یا نرخ)</label>
           <input class="form-control form-control-sm" value="${esc(cfg.chart_label || '')}"
                  oninput="updateChartLabel(this.value)" placeholder="مثلاً: دلار به افغانی">
@@ -1256,7 +1313,7 @@ function renderTopicDetail() {
                    onchange="toggleSkipUnchanged(this.checked)">
             <span class="form-check-label small">
               <i class="bi bi-funnel text-warning me-1"></i>
-              نادیده گرفتن مقادیر تکراری (اگر عدد با آخرین مقدار یکسان بود، نه فوروارد و نه چارت)
+              نادیده گرفتن مقادیر تکراری (اگر عدد با آخرین مقدار یکسان بود، ثبت/فوروارد/چارت انجام نشود)
             </span>
           </label>
 
@@ -1425,6 +1482,9 @@ async function saveAll() {
     topic_id,
     name,
     chart_enabled: !!data.chart_enabled,
+    forward_enabled: data.forward_enabled !== false,
+    chart_message_enabled: data.chart_message_enabled !== false,
+    public_chart_enabled: !!data.chart_enabled && data.public_chart_enabled !== false,
     chart_label: data.chart_label || '',
     skip_unchanged: data.skip_unchanged !== false,
     chart_days: [1, 3, 7, 15].includes(parseInt(data.chart_days)) ? parseInt(data.chart_days) : 7,
