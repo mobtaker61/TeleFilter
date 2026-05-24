@@ -1,13 +1,34 @@
-# Telethon session files (contain account credentials - never commit)
+# ── Runtime data — NEVER commit (server-side state) ─────
+data/users.db
+data/users.db-journal
+data/users.db-wal
+data/users.db-shm
+data/users/
+master_config.json
+
+# ── Telethon session files (contain account credentials) ─
 *.session
 *.session-journal
+panel.session*
+fwd.session*
 
-# Python
+# ── Backups & PID locks ──────────────────────────────────
+*.backup
+*.backup-*
+.forwarder.pid
+
+# ── Python ───────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
 .env
+venv/
+.venv/
 
-# IDE
+# ── IDE ──────────────────────────────────────────────────
 .vscode/
 .idea/
+
+# ── Logs ─────────────────────────────────────────────────
+*.log
+logs/
