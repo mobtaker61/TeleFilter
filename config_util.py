@@ -8,6 +8,17 @@ from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'users.db')
 
+# Timezone محلی برای aggregation روزانه (Asia/Tehran = UTC+3:30).
+# created_at در DB به‌صورت UTC ذخیره می‌شود؛ برای تقسیم به روز این modifierها را به DATE/datetime SQLite پاس می‌دهیم.
+# توجه: SQLite چند modifier باید به‌صورت argument جدا باشند.
+LOCAL_TZ_MODIFIERS = ("+3 hours", "+30 minutes")
+
+
+def _day_expr(col: str = 'created_at') -> str:
+    """SQL expression برای استخراج روز محلی از یک ستون timestamp UTC."""
+    mods = ', '.join(f"'{m}'" for m in LOCAL_TZ_MODIFIERS)
+    return f"DATE({col}, {mods})"
+
 
 def new_group_id() -> str:
     return uuid.uuid4().hex[:12]
@@ -178,6 +189,23 @@ def _init_stats_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, group_id, topic_id)
         )''')
+        # ── Daily aggregation برای نمودارهای طولانی (>7 روز) ──
+        # برای هر روز کاری یک ردیف: میانگین + min/max + open/close + count
+        c.execute('''CREATE TABLE IF NOT EXISTS rate_daily (
+            user_id INTEGER NOT NULL,
+            group_id TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            day TEXT NOT NULL,             -- YYYY-MM-DD (در TZ محلی، Asia/Tehran)
+            avg_value REAL NOT NULL,
+            min_value REAL NOT NULL,
+            max_value REAL NOT NULL,
+            open_value REAL NOT NULL,
+            close_value REAL NOT NULL,
+            sample_count INTEGER NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, group_id, topic_id, day)
+        )''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_rate_daily ON rate_daily(user_id, group_id, topic_id, day)')
         c.commit()
 
 
@@ -306,20 +334,163 @@ def record_rate(user_id: int, group_id: str, topic_id: int, value: float,
         return cur.rowcount > 0
 
 
-def get_rates(user_id: int, group_id: str, topic_id: int, since_hours: int = 168, limit: int = 500) -> list[dict]:
-    """تاریخچهٔ نرخ‌ها در بازه زمانی (ساعت)؛ پیش‌فرض ۷ روز."""
+def get_rates(user_id: int, group_id: str, topic_id: int,
+              since_hours: int = 168, limit: int | None = None) -> list[dict]:
+    """تاریخچهٔ نرخ‌ها (ردیف‌های خام) در بازه زمانی (ساعت)؛ پیش‌فرض ۷ روز.
+    اگر limit=None، همهٔ ردیف‌های بازه برمی‌گردند.
+    """
     if not user_id:
         return []
     since = (datetime.utcnow() - timedelta(hours=int(since_hours))).strftime('%Y-%m-%d %H:%M:%S')
     with sqlite3.connect(DB_PATH) as c:
         c.row_factory = sqlite3.Row
-        rows = c.execute(
+        sql = (
             'SELECT id, value, raw_text, created_at FROM rate_history '
             ' WHERE user_id=? AND group_id=? AND topic_id=? AND created_at>=? '
-            ' ORDER BY created_at ASC LIMIT ?',
-            (user_id, group_id, int(topic_id), since, int(limit)),
-        ).fetchall()
+            ' ORDER BY created_at ASC'
+        )
+        params: list = [user_id, group_id, int(topic_id), since]
+        if limit is not None:
+            sql += ' LIMIT ?'
+            params.append(int(limit))
+        rows = c.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_rates_daily(user_id: int, group_id: str, topic_id: int,
+                    since_days: int = 90) -> list[dict]:
+    """نرخ‌های aggregate شده‌ی روزانه — برای نمودارهای طولانی.
+    خروجی: لیست {created_at (ISO 12:00 UTC), value (avg), min, max, sample_count}
+    """
+    if not user_id:
+        return []
+    since_day = (datetime.utcnow() - timedelta(days=int(since_days))).strftime('%Y-%m-%d')
+    with sqlite3.connect(DB_PATH) as c:
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            'SELECT day, avg_value, min_value, max_value, open_value, close_value, sample_count'
+            ' FROM rate_daily'
+            ' WHERE user_id=? AND group_id=? AND topic_id=? AND day>=?'
+            ' ORDER BY day ASC',
+            (user_id, group_id, int(topic_id), since_day),
+        ).fetchall()
+    # هر روز را به‌صورت نقطه‌ی وسط روز (12:00 UTC) برگردان تا با محور زمانی سازگار باشد
+    out = []
+    for r in rows:
+        out.append({
+            'created_at': f"{r['day']} 12:00:00",
+            'value': r['avg_value'],
+            'min': r['min_value'],
+            'max': r['max_value'],
+            'open': r['open_value'],
+            'close': r['close_value'],
+            'sample_count': r['sample_count'],
+        })
+    return out
+
+
+def get_rates_smart(user_id: int, group_id: str, topic_id: int,
+                    since_hours: int = 168, daily_threshold_hours: int = 168) -> dict:
+    """
+    خواندن هوشمند داده‌ها برای نمودار:
+      - اگر بازه ≤ daily_threshold_hours (پیش‌فرض ۷ روز): تمام ردیف‌های خام
+      - اگر بازه > آن: ترکیب rate_daily (روزهای کامل) + rate_history (روز جاری)
+
+    خروجی: {'rates': [...], 'mode': 'raw'|'daily', 'count': int}
+    """
+    if since_hours <= daily_threshold_hours:
+        rates = get_rates(user_id, group_id, topic_id, since_hours=since_hours, limit=None)
+        return {'rates': rates, 'mode': 'raw', 'count': len(rates)}
+    days = max(1, int(since_hours / 24))
+    daily = get_rates_daily(user_id, group_id, topic_id, since_days=days)
+    today_rates = get_rates(user_id, group_id, topic_id, since_hours=24, limit=None)
+    rates = daily + today_rates
+    return {'rates': rates, 'mode': 'daily', 'count': len(rates)}
+
+
+def aggregate_rate_daily(user_id: int, group_id: str, topic_id: int,
+                         days: list[str] | None = None) -> int:
+    """
+    محاسبه و درج/به‌روزرسانی aggregation روزانه از rate_history.
+    اگر days داده نشود، همه‌ی روزهایی که داده دارند aggregate می‌شوند.
+    خروجی: تعداد روزهای aggregate شده.
+    """
+    if not user_id:
+        return 0
+    with sqlite3.connect(DB_PATH) as c:
+        c.row_factory = sqlite3.Row
+        params: list = [user_id, group_id or '', int(topic_id)]
+        day_expr = _day_expr('created_at')
+        if days:
+            placeholders = ','.join(['?'] * len(days))
+            day_filter = f' AND {day_expr} IN ({placeholders})'
+            params += list(days)
+        else:
+            day_filter = ''
+        # با CTE و window functions، open/close هر روز را درست محاسبه می‌کنیم
+        rows = c.execute(
+            f'''
+            WITH base AS (
+              SELECT
+                value,
+                created_at,
+                {day_expr} AS day,
+                ROW_NUMBER() OVER (PARTITION BY {day_expr} ORDER BY created_at ASC)  AS rn_first,
+                ROW_NUMBER() OVER (PARTITION BY {day_expr} ORDER BY created_at DESC) AS rn_last
+              FROM rate_history
+              WHERE user_id=? AND group_id=? AND topic_id=?{day_filter}
+            )
+            SELECT
+              day,
+              AVG(value)                                       AS avg_v,
+              MIN(value)                                       AS min_v,
+              MAX(value)                                       AS max_v,
+              COUNT(*)                                         AS cnt,
+              MAX(CASE WHEN rn_first=1 THEN value END)         AS open_v,
+              MAX(CASE WHEN rn_last=1  THEN value END)         AS close_v
+            FROM base
+            GROUP BY day
+            ''',
+            params,
+        ).fetchall()
+        n = 0
+        for r in rows:
+            c.execute(
+                'INSERT INTO rate_daily '
+                ' (user_id, group_id, topic_id, day, avg_value, min_value, max_value,'
+                '  open_value, close_value, sample_count, updated_at)'
+                ' VALUES (?,?,?,?,?,?,?,?,?,?, CURRENT_TIMESTAMP)'
+                ' ON CONFLICT(user_id, group_id, topic_id, day) DO UPDATE SET'
+                ' avg_value=excluded.avg_value, min_value=excluded.min_value,'
+                ' max_value=excluded.max_value, open_value=excluded.open_value,'
+                ' close_value=excluded.close_value, sample_count=excluded.sample_count,'
+                ' updated_at=CURRENT_TIMESTAMP',
+                (user_id, group_id or '', int(topic_id), r['day'],
+                 float(r['avg_v']), float(r['min_v']), float(r['max_v']),
+                 float(r['open_v']) if r['open_v'] is not None else float(r['avg_v']),
+                 float(r['close_v']) if r['close_v'] is not None else float(r['avg_v']),
+                 int(r['cnt'])),
+            )
+            n += 1
+        c.commit()
+    return n
+
+
+def list_days_in_range(user_id: int, group_id: str, topic_id: int,
+                       since_days: int) -> list[str]:
+    """لیست روزهای متمایزی که در این بازه داده دارند (برای aggregation)."""
+    if not user_id:
+        return []
+    since = (datetime.utcnow() - timedelta(days=int(since_days))).strftime('%Y-%m-%d %H:%M:%S')
+    day_expr = _day_expr('created_at')
+    with sqlite3.connect(DB_PATH) as c:
+        rows = c.execute(
+            f'SELECT DISTINCT {day_expr} FROM rate_history'
+            ' WHERE user_id=? AND group_id=? AND topic_id=? AND created_at>=?'
+            ' ORDER BY 1',
+            (user_id, group_id or '', int(topic_id), since),
+        ).fetchall()
+    return [r[0] for r in rows]
 
 
 def delete_rate(user_id: int, group_id: str, topic_id: int, rate_id: int) -> bool:

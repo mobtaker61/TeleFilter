@@ -28,8 +28,9 @@ from telethon.utils import get_peer_id
 from config_util import (
     normalize_config, empty_config, find_group, new_group_id,
     config_stats, dashboard_stats, group_config_stats,
-    parse_value, get_rates, latest_rate, delete_rate, delete_rates_range,
+    parse_value, get_rates, get_rates_smart, latest_rate, delete_rate, delete_rates_range,
     clean_text as _clean_text,
+    aggregate_rate_daily, list_days_in_range,
 )
 import forwarder as fwd
 
@@ -802,11 +803,14 @@ def api_parse_value_test():
 @app.route('/api/charts/<group_id>/<int:topic_id>/data')
 @login_required
 def api_chart_data(group_id: str, topic_id: int):
-    """تاریخچهٔ نرخ‌ها برای نمودار interactive در پنل."""
+    """تاریخچهٔ نرخ‌ها برای نمودار interactive در پنل.
+    تا ۷ روز: ردیف‌های خام (نقاط ریز).
+    بیش از ۷ روز: aggregation روزانه + روز جاری ریز.
+    """
     uid = cur_uid()
-    hours = int(request.args.get('hours', 168))   # پیش‌فرض ۷ روز
-    hours = max(1, min(hours, 24 * 90))           # سقف ۹۰ روز
-    rates = get_rates(uid, group_id, topic_id, since_hours=hours)
+    hours = int(request.args.get('hours', 168))
+    hours = max(1, min(hours, 24 * 180))
+    result = get_rates_smart(uid, group_id, topic_id, since_hours=hours)
     cfg = load_user_config(uid)
     g = find_group(cfg, group_id) or {}
     topic_name = ''
@@ -824,9 +828,10 @@ def api_chart_data(group_id: str, topic_id: int):
         'topic_name': topic_name,
         'chart_label': chart_label,
         'group_title': g.get('title', ''),
-        'rates': rates,
+        'rates': result['rates'],
+        'mode': result['mode'],
         'latest': last,
-        'count': len(rates),
+        'count': result['count'],
         'hours': hours,
     })
 
@@ -947,8 +952,8 @@ def api_public_chart_data(token: str, group_id: str, topic_id: int):
     if not topic or not topic.get('chart_enabled'):
         return jsonify({'ok': False, 'msg': 'chart not public'}), 404
     hours = int(request.args.get('hours', 168))
-    hours = max(1, min(hours, 24 * 90))
-    rates = get_rates(uid, group_id, topic_id, since_hours=hours)
+    hours = max(1, min(hours, 24 * 180))
+    result = get_rates_smart(uid, group_id, topic_id, since_hours=hours)
     last = latest_rate(uid, group_id, topic_id)
     return jsonify({
         'ok': True,
@@ -957,9 +962,10 @@ def api_public_chart_data(token: str, group_id: str, topic_id: int):
         'topic_name': topic.get('name', ''),
         'chart_label': topic.get('chart_label', '') or topic.get('name', ''),
         'group_title': g.get('title', ''),
-        'rates': rates,
+        'rates': result['rates'],
+        'mode': result['mode'],
         'latest': last,
-        'count': len(rates),
+        'count': result['count'],
         'hours': hours,
     })
 
@@ -1176,8 +1182,8 @@ def api_backfill_start():
             break
     if not src_obj or not topic_obj:
         return jsonify({'ok': False, 'msg': 'سورس در این تاپیک یافت نشد'}), 404
-    if not (src_obj.get('value_regex') or '').strip():
-        return jsonify({'ok': False, 'msg': 'value_regex برای این سورس تنظیم نشده — بدون آن backfill بی‌معناست'}), 400
+    # توجه: value_regex اختیاری است — اگر خالی باشد، parse_value از heuristic
+    # داخلی (اولین عدد ≥ ۲ رقم) استفاده می‌کند.
 
     key = _bf_key(uid, gid, tid, src)
     existing = _backfill_jobs.get(key)
@@ -1272,6 +1278,20 @@ def api_backfill_status():
             continue
         jobs[f'{k[1]}|{k[2]}|{k[3]}'] = _bf_public(st)
     return jsonify({'ok': True, 'jobs': jobs})
+
+
+@app.route('/api/charts/<group_id>/<int:topic_id>/reaggregate', methods=['POST'])
+@login_required
+def api_chart_reaggregate(group_id: str, topic_id: int):
+    """محاسبه‌ی مجدد aggregation روزانه — برای مواردی که قبلاً backfill شده ولی aggregate نشده."""
+    uid = cur_uid()
+    days_back = int((request.get_json() or {}).get('days', 180))
+    try:
+        days = list_days_in_range(uid, group_id, topic_id, since_days=days_back)
+        n = aggregate_rate_daily(uid, group_id, topic_id, days=days)
+        return jsonify({'ok': True, 'aggregated_days': n})
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': str(e)}), 500
 
 
 @app.route('/api/backfill/cancel', methods=['POST'])

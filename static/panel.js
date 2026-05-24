@@ -906,10 +906,6 @@ function openBackfill(si) {
     showToast('ابتدا chat سورس را وارد کنید', 'warning');
     return;
   }
-  if (!(src.value_regex || '').trim()) {
-    showToast('برای backfill باید value_regex این سورس تنظیم باشد', 'warning');
-    return;
-  }
   document.getElementById('bfModalSrc').textContent = src.chat;
   document.getElementById('bfModalDays').value = '90';
   document.getElementById('bfModalMax').value = '50000';

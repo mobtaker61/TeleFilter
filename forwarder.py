@@ -24,6 +24,7 @@ from config_util import (
     parse_value, record_rate, get_rates, latest_rate,
     get_last_chart_msg, save_last_chart_msg,
     clean_text as _clean_text,
+    aggregate_rate_daily, list_days_in_range,
 )
 # charts را lazy لود می‌کنیم تا اگر matplotlib در سرور دچار خطا شد،
 # فوروارد عادی همچنان کار کند.
@@ -581,6 +582,16 @@ async def backfill_source(
     finally:
         _report()
 
+    # Aggregation روزانه پس از اتمام (همه روزهای بازه را دوباره محاسبه کن)
+    aggregated_days = 0
+    if inserted > 0 or duplicate > 0:
+        try:
+            days_with_data = list_days_in_range(uid, gid, int(topic_id), since_days=int(since_days) + 1)
+            aggregated_days = aggregate_rate_daily(uid, gid, int(topic_id), days=days_with_data)
+            logger.info("[%s] backfill aggregated %d days", uid, aggregated_days)
+        except Exception as e:
+            logger.error("[%s] backfill aggregate failed: %s", uid, e, exc_info=True)
+
     elapsed = round(time.monotonic() - started, 1)
     result = {
         'seen': seen,
@@ -593,6 +604,7 @@ async def backfill_source(
         'newest': newest_iso,
         'elapsed': elapsed,
         'cancelled': cancelled,
+        'aggregated_days': aggregated_days,
     }
     logger.info(
         "[%s] backfill done src=%s topic=%s: %s",
