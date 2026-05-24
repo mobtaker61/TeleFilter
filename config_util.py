@@ -210,12 +210,18 @@ _THOUSANDS_SEP = re.compile(r'[٫٬’‘`]')
 _PUNCT_NOISE = re.compile(r'[«»"\'\(\)\[\]\{\}؛;،,]{2,}')
 
 
+_DOT_AS_THOUSANDS = re.compile(r'(\d)\.(?=\d{3}(?:\D|$))')
+
+
 def clean_text(text: str) -> str:
     """
     پاک‌سازی متن قبل از regex:
       - حذف ایموجی، پرچم، علائم دکوراتیو
       - حذف zero-width characters
       - یکپارچه کردن جداکننده‌های هزارگان غیراستاندارد به ,
+      - تبدیل هوشمند '.' در نقش جداکننده‌ی هزارگان به ',' (مثل '89.500' → '89,500')
+        — اعشار واقعی مثل '1.5' دست‌نخورده می‌ماند چون فقط وقتی بعدش *دقیقاً 3 رقم*
+        و سپس کاراکتر غیررقم (یا انتها) بیاید، تبدیل می‌شود.
       - collapse کردن whitespace ها به یک space
     رشته اصلی (پیام تلگرام) دست‌نخورده می‌ماند — این فقط برای parse است.
     """
@@ -224,6 +230,7 @@ def clean_text(text: str) -> str:
     s = _EMOJI_CLEAN.sub(' ', text)
     s = _THOUSANDS_SEP.sub(',', s)
     s = _PUNCT_NOISE.sub(' ', s)
+    s = _DOT_AS_THOUSANDS.sub(r'\1,', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
