@@ -47,6 +47,7 @@ function buildCfgMapFromGroups(grps) {
         chart_enabled: !!t.chart_enabled,
         chart_label: t.chart_label || '',
         skip_unchanged: t.skip_unchanged !== false,
+        chart_days: [1, 3, 7, 15].includes(parseInt(t.chart_days)) ? parseInt(t.chart_days) : 7,
       };
     }
   }
@@ -66,10 +67,11 @@ function groupIsForum(g) {
 
 function ensureCfg() {
   const k = cfgKey(selGroupId, selTopicId);
-  if (!cfgMap[k]) cfgMap[k] = { sources: [], chart_enabled: false, chart_label: '', skip_unchanged: true };
+  if (!cfgMap[k]) cfgMap[k] = { sources: [], chart_enabled: false, chart_label: '', skip_unchanged: true, chart_days: 7 };
   if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
   if (cfgMap[k].chart_label === undefined) cfgMap[k].chart_label = '';
   if (cfgMap[k].skip_unchanged === undefined) cfgMap[k].skip_unchanged = true;
+  if (!cfgMap[k].chart_days) cfgMap[k].chart_days = 7;
   return cfgMap[k];
 }
 
@@ -825,6 +827,12 @@ function toggleSkipUnchanged(val) {
   markDirty();
 }
 
+function updateChartDays(val) {
+  const v = parseInt(val);
+  ensureCfg().chart_days = [1, 3, 7, 15].includes(v) ? v : 7;
+  markDirty();
+}
+
 async function testSourceRegex(si) {
   const src = ensureCfg().sources[si];
   const sampleEl = document.getElementById(`regex_sample_${si}`);
@@ -1009,6 +1017,20 @@ function renderTopicDetail() {
           <input class="form-control form-control-sm" value="${esc(cfg.chart_label || '')}"
                  oninput="updateChartLabel(this.value)" placeholder="مثلاً: دلار به افغانی">
 
+          <div class="d-flex align-items-center gap-2 mt-2">
+            <label class="small text-muted mb-0" style="white-space:nowrap">
+              <i class="bi bi-calendar3 text-primary me-1"></i>بازهٔ نمودار ارسالی:
+            </label>
+            <div class="btn-group btn-group-sm" role="group">
+              ${[1, 3, 7, 15].map(d => `
+                <input type="radio" class="btn-check" name="chartDays" id="chartDays${d}"
+                       ${cfg.chart_days === d ? 'checked' : ''}
+                       onchange="updateChartDays(${d})">
+                <label class="btn btn-outline-primary" for="chartDays${d}">${d} روز</label>
+              `).join('')}
+            </div>
+          </div>
+
           <label class="form-check form-switch mt-2 mb-0">
             <input class="form-check-input" type="checkbox" id="skipUnchanged"
                    ${cfg.skip_unchanged !== false ? 'checked' : ''}
@@ -1130,6 +1152,7 @@ async function saveAll() {
     chart_enabled: !!data.chart_enabled,
     chart_label: data.chart_label || '',
     skip_unchanged: data.skip_unchanged !== false,
+    chart_days: [1, 3, 7, 15].includes(parseInt(data.chart_days)) ? parseInt(data.chart_days) : 7,
     sources: (data.sources || []).map(s => ({
       chat: s.chat || '',
       filters: s.filters || [],

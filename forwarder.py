@@ -124,6 +124,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
             chart_enabled = bool(t.get('chart_enabled', False))
             chart_label = str(t.get('chart_label') or t.get('name') or '')
             skip_unchanged = bool(t.get('skip_unchanged', True))
+            chart_days = int(t.get('chart_days') or 7)
             for s in t.get('sources') or []:
                 raw_chat = s.get('chat')
                 chat = raw_chat.strip() if isinstance(raw_chat, str) else raw_chat
@@ -147,6 +148,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'chart_label': chart_label,
                         'value_regex': value_regex,
                         'skip_unchanged': skip_unchanged,
+                        'chart_days': chart_days,
                     }
                     for k in _peer_keys(src_ent):
                         source_map.setdefault(k, []).append(route)
@@ -236,7 +238,8 @@ async def _process_chart(
         return
 
     try:
-        rates = get_rates(uid, gid, tid, since_hours=24 * 7)
+        days = int(route.get('chart_days') or 7)
+        rates = get_rates(uid, gid, tid, since_hours=24 * days)
         png = render_rate_chart(
             rates,
             title=route.get('chart_label') or f"Topic {tid}",

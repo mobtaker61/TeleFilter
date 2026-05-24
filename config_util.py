@@ -60,6 +60,17 @@ def _norm_group(g: dict) -> dict:
     return out
 
 
+_VALID_CHART_DAYS = (1, 3, 7, 15)
+
+
+def _norm_chart_days(v) -> int:
+    try:
+        d = int(v)
+    except (TypeError, ValueError):
+        return 7
+    return d if d in _VALID_CHART_DAYS else 7
+
+
 def _norm_topic(t: dict) -> dict:
     return {
         'topic_id': t.get('topic_id'),
@@ -67,6 +78,7 @@ def _norm_topic(t: dict) -> dict:
         'chart_enabled': bool(t.get('chart_enabled', False)),
         'chart_label': str(t.get('chart_label', '') or ''),
         'skip_unchanged': bool(t.get('skip_unchanged', True)),
+        'chart_days': _norm_chart_days(t.get('chart_days', 7)),
         'sources': [_norm_source(s) for s in (t.get('sources') or [])],
     }
 

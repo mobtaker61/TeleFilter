@@ -939,12 +939,14 @@ def api_chart_test_send(group_id: str, topic_id: int):
         return jsonify({'ok': False, 'msg': 'گروه یافت نشد'}), 404
     is_forum = bool(g.get('is_forum'))
     chart_label = ''
+    chart_days = 7
     for t in g.get('topics') or []:
         if int(t.get('topic_id') or 0) == int(topic_id):
             chart_label = t.get('chart_label') or t.get('name') or ''
+            chart_days = int(t.get('chart_days') or 7)
             break
 
-    rates = get_rates(uid, group_id, topic_id, since_hours=24 * 7)
+    rates = get_rates(uid, group_id, topic_id, since_hours=24 * chart_days)
     try:
         png = _charts.render_rate_chart(
             rates,
