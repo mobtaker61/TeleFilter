@@ -246,11 +246,11 @@ def _format_change(current: float, previous: float | None) -> str:
         return '⚪ بدون تغییر'
     if previous == 0:
         sign = '+' if diff > 0 else ''
-        emoji = '🟢' if diff > 0 else '🔴'
+        emoji = '🔝' if diff > 0 else '🔻'
         return f'{emoji} {sign}{_fmt_value(diff)}'
     pct = (diff / abs(previous)) * 100.0
     sign = '+' if diff > 0 else ''
-    emoji = '🟢' if diff > 0 else '🔴'
+    emoji = '🔝' if diff > 0 else '🔻'
     return f'{emoji} {sign}{_fmt_value(diff)} ({sign}{pct:.2f}%)'
 
 
