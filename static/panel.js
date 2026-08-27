@@ -50,6 +50,7 @@ function buildCfgMapFromGroups(grps) {
         forward_enabled: t.forward_enabled !== false,
         chart_message_enabled: t.chart_message_enabled !== false,
         public_chart_enabled: t.public_chart_enabled !== false && !!t.chart_enabled,
+        forum_rate_enabled: !!t.forum_rate_enabled,
         chart_label: t.chart_label || '',
         skip_unchanged: t.skip_unchanged !== false,
         chart_days: [1, 3, 7, 15].includes(parseInt(t.chart_days)) ? parseInt(t.chart_days) : 7,
@@ -77,12 +78,14 @@ function ensureCfg() {
   if (!cfgMap[k]) cfgMap[k] = {
     sources: [], chart_enabled: false, chart_label: '',
     forward_enabled: true, chart_message_enabled: true, public_chart_enabled: false,
+    forum_rate_enabled: false,
     skip_unchanged: true, chart_days: 7, chart_order: 0, max_change_percent: 10,
   };
   if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
   if (cfgMap[k].forward_enabled === undefined) cfgMap[k].forward_enabled = true;
   if (cfgMap[k].chart_message_enabled === undefined) cfgMap[k].chart_message_enabled = true;
   if (cfgMap[k].public_chart_enabled === undefined) cfgMap[k].public_chart_enabled = !!cfgMap[k].chart_enabled;
+  if (cfgMap[k].forum_rate_enabled === undefined) cfgMap[k].forum_rate_enabled = false;
   if (cfgMap[k].chart_label === undefined) cfgMap[k].chart_label = '';
   if (cfgMap[k].skip_unchanged === undefined) cfgMap[k].skip_unchanged = true;
   if (!cfgMap[k].chart_days) cfgMap[k].chart_days = 7;
@@ -861,6 +864,11 @@ function togglePublicChartEnabled(val) {
   markDirty();
 }
 
+function toggleForumRateEnabled(val) {
+  ensureCfg().forum_rate_enabled = !!val;
+  markDirty();
+}
+
 function updateChartLabel(val) {
   ensureCfg().chart_label = val;
   markDirty();
@@ -1233,6 +1241,8 @@ function renderTopicDetail() {
   const forwardOn = cfg.forward_enabled !== false;
   const chartMsgOn = cfg.chart_message_enabled !== false;
   const publicChartOn = cfg.public_chart_enabled !== false && chartOn;
+  const forumRateOn = !!cfg.forum_rate_enabled;
+  const showForumRate = groupIsForum(g);
 
   detail.innerHTML = `
     <div class="topic-hdr">
@@ -1260,7 +1270,7 @@ function renderTopicDetail() {
       ${chartOn ? `
         <div class="chart-fields">
           <div class="row g-2 mb-3">
-            <div class="col-md-4">
+            <div class="${showForumRate ? 'col-md-3' : 'col-md-4'}">
               <label class="form-check form-switch m-0">
                 <input class="form-check-input" type="checkbox" ${forwardOn ? 'checked' : ''}
                        onchange="toggleForwardEnabled(this.checked)">
@@ -1269,7 +1279,7 @@ function renderTopicDetail() {
                 </span>
               </label>
             </div>
-            <div class="col-md-4">
+            <div class="${showForumRate ? 'col-md-3' : 'col-md-4'}">
               <label class="form-check form-switch m-0">
                 <input class="form-check-input" type="checkbox" ${chartMsgOn ? 'checked' : ''}
                        onchange="toggleChartMessageEnabled(this.checked)">
@@ -1278,7 +1288,7 @@ function renderTopicDetail() {
                 </span>
               </label>
             </div>
-            <div class="col-md-4">
+            <div class="${showForumRate ? 'col-md-3' : 'col-md-4'}">
               <label class="form-check form-switch m-0">
                 <input class="form-check-input" type="checkbox" ${publicChartOn ? 'checked' : ''}
                        onchange="togglePublicChartEnabled(this.checked)">
@@ -1287,6 +1297,17 @@ function renderTopicDetail() {
                 </span>
               </label>
             </div>
+            ${showForumRate ? `
+              <div class="col-md-3">
+                <label class="form-check form-switch m-0" title="آپدیت یک پیام ثابت در تاپیک General گروه">
+                  <input class="form-check-input" type="checkbox" ${forumRateOn ? 'checked' : ''}
+                         onchange="toggleForumRateEnabled(this.checked)">
+                  <span class="form-check-label small">
+                    <i class="bi bi-chat-square-text text-warning me-1"></i> آپدیت نرخ در تالار
+                  </span>
+                </label>
+              </div>
+            ` : ''}
           </div>
 
           <label class="small text-muted mb-1">برچسب نمودار (نام واحد یا نرخ)</label>
@@ -1485,6 +1506,7 @@ async function saveAll() {
     forward_enabled: data.forward_enabled !== false,
     chart_message_enabled: data.chart_message_enabled !== false,
     public_chart_enabled: !!data.chart_enabled && data.public_chart_enabled !== false,
+    forum_rate_enabled: !!data.chart_enabled && !!data.forum_rate_enabled,
     chart_label: data.chart_label || '',
     skip_unchanged: data.skip_unchanged !== false,
     chart_days: [1, 3, 7, 15].includes(parseInt(data.chart_days)) ? parseInt(data.chart_days) : 7,

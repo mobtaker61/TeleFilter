@@ -1005,6 +1005,7 @@ def fwd_diag():
                 'chart_enabled': bool(r.get('chart_enabled')),
                 'forward_enabled': bool(r.get('forward_enabled', True)),
                 'chart_message_enabled': bool(r.get('chart_message_enabled', True)),
+                'forum_rate_enabled': bool(r.get('forum_rate_enabled', False)),
                 'value_regex': r.get('value_regex') or '',
                 'chart_label': r.get('chart_label') or '',
             })
@@ -1060,6 +1061,7 @@ def api_chart_status():
                 'chart_label': t.get('chart_label', '') or '',
                 'chart_message_enabled': bool(t.get('chart_message_enabled', True)),
                 'public_chart_enabled': bool(t.get('public_chart_enabled', t.get('chart_enabled'))),
+                'forum_rate_enabled': bool(t.get('forum_rate_enabled', False)),
                 'sources': srcs,
             })
     return jsonify({

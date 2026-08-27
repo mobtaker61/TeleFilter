@@ -23,6 +23,7 @@ from config_util import (
     normalize_config, record_forward,
     parse_value, record_rate, get_rates, get_rates_smart, latest_rate,
     get_last_chart_msg, save_last_chart_msg,
+    get_forum_rate_msg, save_forum_rate_msg, clear_forum_rate_msg,
     clean_text as _clean_text,
     aggregate_rate_daily, list_days_in_range,
 )
@@ -45,6 +46,7 @@ except Exception as _e:  # noqa: BLE001
     logging.getLogger('telefilter.forwarder').warning("apex_chart load failed: %s", _e)
 
 logger = logging.getLogger('telefilter.forwarder')
+GENERAL_TOPIC_ID = 1
 
 # per-user state
 _routes: dict[int, dict] = {}      # uid -> {'source_map', 'targets', 'forum'}
@@ -133,6 +135,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
             chart_enabled = bool(t.get('chart_enabled', False))
             forward_enabled = bool(t.get('forward_enabled', True))
             chart_message_enabled = bool(t.get('chart_message_enabled', True))
+            forum_rate_enabled = bool(t.get('forum_rate_enabled', False))
             chart_label = str(t.get('chart_label') or t.get('name') or '')
             skip_unchanged = bool(t.get('skip_unchanged', True))
             chart_days = int(t.get('chart_days') or 7)
@@ -165,6 +168,7 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'chart_enabled': chart_enabled,
                         'forward_enabled': forward_enabled,
                         'chart_message_enabled': chart_message_enabled,
+                        'forum_rate_enabled': forum_rate_enabled,
                         'chart_label': chart_label,
                         'value_regex': value_regex,
                         'skip_unchanged': skip_unchanged,
@@ -252,6 +256,38 @@ def _format_change(current: float, previous: float | None) -> str:
     sign = '+' if diff > 0 else ''
     emoji = '🔝' if diff > 0 else '🔻'
     return f'{emoji} {sign}{_fmt_value(diff)} ({sign}{pct:.2f}%)'
+
+
+def _forum_rate_text(route: dict, value: float) -> str:
+    label = route.get('chart_label') or route.get('name') or f"Topic {route.get('topic_id')}"
+    return f"آخرین نرخ {label}:\n{_fmt_value(value)}"
+
+
+async def _update_forum_rate_message(uid: int, client, route: dict, target, value: float):
+    """یک پیام ثابت برای نرخ این تاپیک در General topic ایجاد یا ویرایش می‌کند."""
+    gid = route['gid']
+    tid = route['topic_id']
+    text = _forum_rate_text(route, value)
+    old_msg = get_forum_rate_msg(uid, gid, tid)
+
+    if old_msg:
+        try:
+            await client.edit_message(target, int(old_msg), text)
+            logger.info("[%s] forum rate updated topic=%s msg=%s", uid, tid, old_msg)
+            return
+        except Exception as e:
+            logger.warning("[%s] forum rate edit failed topic=%s msg=%s: %s", uid, tid, old_msg, e)
+            clear_forum_rate_msg(uid, gid, tid)
+
+    try:
+        sent = await client.send_message(target, text, reply_to=GENERAL_TOPIC_ID)
+        if sent and hasattr(sent, 'id'):
+            save_forum_rate_msg(uid, gid, tid, int(sent.id))
+            logger.info("[%s] forum rate created topic=%s msg=%s", uid, tid, sent.id)
+        else:
+            logger.warning("[%s] forum rate sent but no id returned: %r", uid, sent)
+    except Exception as e:
+        logger.error("[%s] forum rate send failed topic=%s: %s", uid, tid, e, exc_info=True)
 
 
 async def _process_chart(
@@ -403,7 +439,12 @@ def install_handler(uid: int, client):
             target = targets.get(gid)
             wants_forward = route.get('forward_enabled', True)
             wants_chart_message = bool(route.get('chart_enabled')) and route.get('chart_message_enabled', True)
-            if (wants_forward or wants_chart_message) and not target:
+            wants_forum_rate = (
+                bool(route.get('chart_enabled'))
+                and bool(route.get('is_forum'))
+                and bool(route.get('forum_rate_enabled'))
+            )
+            if (wants_forward or wants_chart_message or wants_forum_rate) and not target:
                 logger.warning("[%s] no target for group=%s", uid, gid)
                 continue
 
@@ -458,6 +499,8 @@ def install_handler(uid: int, client):
                     "[%s] chart: value=%s %s topic=%s",
                     uid, parsed_value, "recorded" if inserted else "duplicate/ignored", tid,
                 )
+                if wants_forum_rate:
+                    await _update_forum_rate_message(uid, client, route, target, parsed_value)
 
             if wants_forward:
                 try:

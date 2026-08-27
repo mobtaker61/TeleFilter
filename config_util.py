@@ -100,6 +100,7 @@ def _norm_topic(t: dict) -> dict:
         'forward_enabled': bool(t.get('forward_enabled', True)),
         'chart_message_enabled': bool(t.get('chart_message_enabled', True)),
         'public_chart_enabled': bool(t.get('public_chart_enabled', t.get('chart_enabled', False))),
+        'forum_rate_enabled': bool(t.get('forum_rate_enabled', False)),
         'chart_label': str(t.get('chart_label', '') or ''),
         'skip_unchanged': bool(t.get('skip_unchanged', True)),
         'chart_days': _norm_chart_days(t.get('chart_days', 7)),
@@ -185,6 +186,14 @@ def _init_stats_db():
         )
 
         c.execute('''CREATE TABLE IF NOT EXISTS chart_message (
+            user_id INTEGER NOT NULL,
+            group_id TEXT NOT NULL,
+            topic_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, group_id, topic_id)
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS forum_rate_message (
             user_id INTEGER NOT NULL,
             group_id TEXT NOT NULL,
             topic_id INTEGER NOT NULL,
@@ -607,6 +616,36 @@ def clear_last_chart_msg(user_id: int, group_id: str, topic_id: int):
     with sqlite3.connect(DB_PATH) as c:
         c.execute(
             'DELETE FROM chart_message WHERE user_id=? AND group_id=? AND topic_id=?',
+            (user_id, group_id, int(topic_id)),
+        )
+        c.commit()
+
+
+def get_forum_rate_msg(user_id: int, group_id: str, topic_id: int) -> int | None:
+    with sqlite3.connect(DB_PATH) as c:
+        r = c.execute(
+            'SELECT message_id FROM forum_rate_message WHERE user_id=? AND group_id=? AND topic_id=?',
+            (user_id, group_id, int(topic_id)),
+        ).fetchone()
+        return int(r[0]) if r else None
+
+
+def save_forum_rate_msg(user_id: int, group_id: str, topic_id: int, message_id: int):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            'INSERT INTO forum_rate_message (user_id, group_id, topic_id, message_id, updated_at)'
+            ' VALUES (?,?,?,?,CURRENT_TIMESTAMP)'
+            ' ON CONFLICT(user_id,group_id,topic_id) DO UPDATE SET'
+            ' message_id=excluded.message_id, updated_at=CURRENT_TIMESTAMP',
+            (user_id, group_id, int(topic_id), int(message_id)),
+        )
+        c.commit()
+
+
+def clear_forum_rate_msg(user_id: int, group_id: str, topic_id: int):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            'DELETE FROM forum_rate_message WHERE user_id=? AND group_id=? AND topic_id=?',
             (user_id, group_id, int(topic_id)),
         )
         c.commit()
