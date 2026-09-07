@@ -8,6 +8,10 @@ import threading
 import asyncio
 import os
 import atexit
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows dev — single process
 import hashlib
 import hmac
 import logging
@@ -471,11 +475,36 @@ def _fwd_watchdog():
                 print(f'[watchdog:{uid}] {e}')
 
 
-threading.Thread(
-    target=lambda: (time.sleep(4), _auto_start_all()),
-    daemon=True, name='fwd-boot'
-).start()
-threading.Thread(target=_fwd_watchdog, daemon=True, name='fwd-watchdog').start()
+_fwd_lock_handle = None
+
+
+def _is_forwarder_leader() -> bool:
+    """فقط یک worker/process (gunicorn) اجازه اجرای Telethon forwarder دارد."""
+    global _fwd_lock_handle
+    if fcntl is None:
+        return True
+    lock_path = os.path.join(BASE_DIR, 'data', '.forwarder.lock')
+    try:
+        fh = open(lock_path, 'w')
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            fh.close()
+        except Exception:
+            pass
+        return False
+    _fwd_lock_handle = fh
+    return True
+
+
+if _is_forwarder_leader():
+    threading.Thread(
+        target=lambda: (time.sleep(4), _auto_start_all()),
+        daemon=True, name='fwd-boot'
+    ).start()
+    threading.Thread(target=_fwd_watchdog, daemon=True, name='fwd-watchdog').start()
+else:
+    print('[TeleFilter] forwarder disabled in this worker (not leader)')
 
 
 def stop_fwd(uid: int):
@@ -1142,20 +1171,22 @@ def api_chart_test_send(group_id: str, topic_id: int):
         target = await c.get_entity(int(g['telegram_id']))
         from config_util import get_last_chart_msg as _glcm, save_last_chart_msg as _slcm
         old = _glcm(uid, group_id, topic_id)
-        if old:
+        named = fwd._named_png(chart_label or f'topic_{topic_id}', png)
+        caption = f'📊 {chart_label} (test · {render_engine})'
+        kwargs = {'caption': caption, 'force_document': False}
+        if is_forum and topic_id and topic_id > 0:
+            kwargs['reply_to'] = int(topic_id)
+        sent = await c.send_file(target, file=named, **kwargs)
+        if not sent or not hasattr(sent, 'id'):
+            return None
+        new_id = int(sent.id)
+        _slcm(uid, group_id, topic_id, new_id)
+        if old and int(old) != new_id:
             try:
                 await c.delete_messages(target, [int(old)])
             except Exception:
                 pass
-        named = fwd._named_png(chart_label or f'topic_{topic_id}', png)
-        kwargs = {'caption': f'📊 {chart_label} (test · {render_engine})', 'force_document': False}
-        if is_forum and topic_id and topic_id > 0:
-            kwargs['reply_to'] = int(topic_id)
-        sent = await c.send_file(target, file=named, **kwargs)
-        if sent and hasattr(sent, 'id'):
-            _slcm(uid, group_id, topic_id, int(sent.id))
-            return int(sent.id)
-        return None
+        return new_id
 
     try:
         msg_id = tg_run(_send(), timeout=45)
@@ -1164,6 +1195,14 @@ def api_chart_test_send(group_id: str, topic_id: int):
             'rates_count': len(rates), 'mode': mode, 'engine': render_engine,
         })
     except Exception as e:
+        fw = fwd._flood_wait_seconds(e)
+        if fw:
+            mins = max(1, fw // 60)
+            return jsonify({
+                'ok': False, 'stage': 'send',
+                'msg': f'تلگرام محدودیت موقت گذاشته — حدود {mins} دقیقه صبر کنید و دوباره تلاش کنید',
+                'flood_wait_seconds': fw,
+            }), 429
         return jsonify({'ok': False, 'stage': 'send', 'msg': str(e)}), 500
 
 # ══════════════════════════════════════════════════════════

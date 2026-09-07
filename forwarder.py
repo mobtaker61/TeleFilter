@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from telethon import events
+from telethon.errors import MessageNotModifiedError, MessageIdInvalidError, FloodWaitError
 from telethon.tl.functions.messages import ForwardMessagesRequest
 from telethon.utils import get_peer_id
 
@@ -52,6 +53,43 @@ GENERAL_TOPIC_ID = 1
 _routes: dict[int, dict] = {}      # uid -> {'source_map', 'targets', 'forum'}
 _handlers: dict[int, Any] = {}     # uid -> registered event handler callable
 _last_error: dict[int, str] = {}   # uid -> last error string
+_forum_rate_locks: dict[tuple, asyncio.Lock] = {}  # (uid,gid,tid) -> lock
+_chart_locks: dict[tuple, asyncio.Lock] = {}
+
+
+def _topic_lock(store: dict, uid: int, gid: str, tid: int) -> asyncio.Lock:
+    key = (uid, gid, int(tid))
+    lock = store.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        store[key] = lock
+    return lock
+
+
+def _forum_rate_lock(uid: int, gid: str, tid: int) -> asyncio.Lock:
+    return _topic_lock(_forum_rate_locks, uid, gid, tid)
+
+
+def _chart_lock(uid: int, gid: str, tid: int) -> asyncio.Lock:
+    return _topic_lock(_chart_locks, uid, gid, tid)
+
+
+def _msg_missing(exc: Exception) -> bool:
+    if isinstance(exc, MessageIdInvalidError):
+        return True
+    s = str(exc).lower()
+    return any(x in s for x in (
+        'message_id_invalid', 'message not found', 'message to edit not found',
+        'could not find', 'specified message id',
+    ))
+
+
+def _flood_wait_seconds(exc: Exception) -> int | None:
+    if isinstance(exc, FloodWaitError):
+        return int(exc.seconds)
+    import re
+    m = re.search(r'wait of (\d+) second', str(exc), re.I)
+    return int(m.group(1)) if m else None
 
 
 def _peer_keys(entity) -> set[int]:
@@ -268,26 +306,42 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
     gid = route['gid']
     tid = route['topic_id']
     text = _forum_rate_text(route, value)
-    old_msg = get_forum_rate_msg(uid, gid, tid)
 
-    if old_msg:
+    async with _forum_rate_lock(uid, gid, tid):
+        old_msg = get_forum_rate_msg(uid, gid, tid)
+
+        if old_msg:
+            try:
+                await client.edit_message(target, int(old_msg), text)
+                logger.info("[%s] forum rate updated topic=%s msg=%s", uid, tid, old_msg)
+                return
+            except MessageNotModifiedError:
+                logger.debug("[%s] forum rate unchanged topic=%s msg=%s", uid, tid, old_msg)
+                return
+            except Exception as e:
+                fw = _flood_wait_seconds(e)
+                if fw:
+                    logger.warning(
+                        "[%s] forum rate flood wait %ss — skip edit topic=%s msg=%s",
+                        uid, fw, tid, old_msg,
+                    )
+                    return
+                if _msg_missing(e):
+                    logger.warning("[%s] forum rate msg=%s missing, will recreate: %s", uid, old_msg, e)
+                    clear_forum_rate_msg(uid, gid, tid)
+                else:
+                    logger.warning("[%s] forum rate edit failed topic=%s msg=%s: %s", uid, tid, old_msg, e)
+                    return
+
         try:
-            await client.edit_message(target, int(old_msg), text)
-            logger.info("[%s] forum rate updated topic=%s msg=%s", uid, tid, old_msg)
-            return
+            sent = await client.send_message(target, text, reply_to=GENERAL_TOPIC_ID)
+            if sent and hasattr(sent, 'id'):
+                save_forum_rate_msg(uid, gid, tid, int(sent.id))
+                logger.info("[%s] forum rate created topic=%s msg=%s", uid, tid, sent.id)
+            else:
+                logger.warning("[%s] forum rate sent but no id returned: %r", uid, sent)
         except Exception as e:
-            logger.warning("[%s] forum rate edit failed topic=%s msg=%s: %s", uid, tid, old_msg, e)
-            clear_forum_rate_msg(uid, gid, tid)
-
-    try:
-        sent = await client.send_message(target, text, reply_to=GENERAL_TOPIC_ID)
-        if sent and hasattr(sent, 'id'):
-            save_forum_rate_msg(uid, gid, tid, int(sent.id))
-            logger.info("[%s] forum rate created topic=%s msg=%s", uid, tid, sent.id)
-        else:
-            logger.warning("[%s] forum rate sent but no id returned: %r", uid, sent)
-    except Exception as e:
-        logger.error("[%s] forum rate send failed topic=%s: %s", uid, tid, e, exc_info=True)
+            logger.error("[%s] forum rate send failed topic=%s: %s", uid, tid, e, exc_info=True)
 
 
 async def _process_chart(
@@ -300,7 +354,7 @@ async def _process_chart(
     اگر برای این سورس chart فعال است:
       1) عدد را با regex استخراج کن (اگر pre_parsed نداده شده)
       2) در DB ذخیره کن
-      3) نمودار را رندر و ارسال کن، نمودار قبلی را حذف کن
+      3) نمودار را رندر و ارسال کن؛ پس از موفقیت، پیام قبلی را حذف کن
     """
     gid = route['gid']
     tid = route['topic_id']
@@ -363,14 +417,6 @@ async def _process_chart(
         logger.warning("[%s] chart render returned empty", uid)
         return
 
-    old_msg = get_last_chart_msg(uid, gid, tid)
-    if old_msg:
-        try:
-            await client.delete_messages(target, [int(old_msg)])
-            logger.info("[%s] chart: deleted previous msg=%s", uid, old_msg)
-        except Exception as e:
-            logger.warning("[%s] chart: delete old msg=%s failed: %s", uid, old_msg, e)
-
     last_str = _fmt_value(value)
     change_line = _format_change(value, previous_value)
     caption = (
@@ -378,19 +424,42 @@ async def _process_chart(
         f"آخرین: {last_str}\n"
         f"{change_line}"
     ).strip()
-    try:
-        named = _named_png(route.get('chart_label') or f'topic_{tid}', png)
-        kwargs = {'caption': caption, 'force_document': False}
-        if route.get('is_forum') and tid and tid > 0:
-            kwargs['reply_to'] = int(tid)
-        sent = await client.send_file(target, file=named, **kwargs)
-        if sent and hasattr(sent, 'id'):
-            save_last_chart_msg(uid, gid, tid, int(sent.id))
-            logger.info("[%s] chart sent topic=%s msg=%s value=%s", uid, tid, sent.id, value)
-        else:
-            logger.warning("[%s] chart sent but no id returned: %r", uid, sent)
-    except Exception as e:
-        logger.error("[%s] chart send failed topic=%s: %s", uid, tid, e, exc_info=True)
+    named = _named_png(route.get('chart_label') or f'topic_{tid}', png)
+
+    async with _chart_lock(uid, gid, tid):
+        old_msg = get_last_chart_msg(uid, gid, tid)
+        # تلگرام روی EditMessageRequest برای تصویر محدودیت شدید دارد (FloodWait).
+        # الگوی امن: ابتدا پیام جدید بفرست، سپس قبلی را حذف کن.
+        try:
+            kwargs = {'caption': caption, 'force_document': False}
+            if route.get('is_forum') and tid and tid > 0:
+                kwargs['reply_to'] = int(tid)
+            sent = await client.send_file(target, file=named, **kwargs)
+            if not sent or not hasattr(sent, 'id'):
+                logger.warning("[%s] chart sent but no id returned: %r", uid, sent)
+                return
+            new_id = int(sent.id)
+            save_last_chart_msg(uid, gid, tid, new_id)
+            logger.info("[%s] chart sent topic=%s msg=%s value=%s", uid, tid, new_id, value)
+            if old_msg and int(old_msg) != new_id:
+                try:
+                    await client.delete_messages(target, [int(old_msg)])
+                    logger.info("[%s] chart: removed previous msg=%s", uid, old_msg)
+                except Exception as de:
+                    fw = _flood_wait_seconds(de)
+                    if fw:
+                        logger.warning(
+                            "[%s] chart delete flood wait %ss — old msg=%s kept in chat",
+                            uid, fw, old_msg,
+                        )
+                    else:
+                        logger.warning("[%s] chart delete old msg=%s failed: %s", uid, old_msg, de)
+        except Exception as e:
+            fw = _flood_wait_seconds(e)
+            if fw:
+                logger.warning("[%s] chart send flood wait %ss topic=%s", uid, fw, tid)
+            else:
+                logger.error("[%s] chart send failed topic=%s: %s", uid, tid, e, exc_info=True)
 
 
 def install_handler(uid: int, client):

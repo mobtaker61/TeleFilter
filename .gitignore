@@ -16,6 +16,7 @@ fwd.session*
 *.backup
 *.backup-*
 .forwarder.pid
+.forwarder.lock
 
 # ── Python ───────────────────────────────────────────────
 __pycache__/

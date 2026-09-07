@@ -248,7 +248,7 @@ async def render_chart_png(
     title: str = '',
     mode: str = 'raw',
     days: int = 7,
-    timeout_ms: int = 8000,
+    timeout_ms: int = 15000,
 ) -> bytes | None:
     """
     رندر یک نمودار با ApexCharts و برگرداندن PNG bytes.
@@ -264,11 +264,11 @@ async def render_chart_png(
         ctx = await _browser.new_context(viewport={'width': 1000, 'height': 560})
         page = await ctx.new_page()
         try:
-            await page.set_content(html, wait_until='load', timeout=timeout_ms)
+            await page.set_content(html, wait_until='networkidle', timeout=timeout_ms)
             # منتظر بمان تا apex flag __APEX_RENDERED ست شود
             await page.wait_for_function('window.__APEX_RENDERED === true', timeout=timeout_ms)
-            # یک مکث کوتاه برای font loading
-            await page.wait_for_timeout(250)
+            # مکث برای فونت و رندر نهایی
+            await page.wait_for_timeout(400)
             el = await page.query_selector('.wrap')
             if el is None:
                 el = page
