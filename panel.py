@@ -1441,25 +1441,8 @@ def auth_prepare():
     if not c:
         return jsonify({'error': 'API سرور تنظیم نشده'}), 503
 
-    phone = (user.get('phone') or '').strip()
-    if phone:
-        try:
-            sent = tg_run(c.send_code_request(phone))
-            _tg_auth.setdefault(uid, {}).update(
-                phase='code_sent', phone=phone,
-                phone_code_hash=sent.phone_code_hash,
-            )
-            return jsonify({
-                'ok': True,
-                'step': 'code',
-                'masked_phone': _mask_phone(phone),
-                'first_name': user.get('first_name', ''),
-                'username': user.get('username', ''),
-                'auto_code': True,
-            })
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-
+    # پس از جابجایی سرور / FloodWait، ارسال خودکار SMS سهمیه کد را می‌سوزاند.
+    # همیشه اول QR؛ مسیر شماره فقط با کلیک دستی «ارسال کد».
     async def _start_qr():
         if await c.is_user_authorized():
             return {'already': True}
@@ -1469,7 +1452,14 @@ def auth_prepare():
     try:
         qr = tg_run(_start_qr(), timeout=30)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        err = str(e)
+        phone = (user.get('phone') or '').strip()
+        return jsonify({
+            'error': err,
+            'hint': 'اگر کد SMS تمام شده، چند ساعت صبر کنید یا از QR در اپ تلگرام استفاده کنید',
+            'fallback_phone': bool(phone),
+            'masked_phone': _mask_phone(phone) if phone else '',
+        }), 500
 
     if isinstance(qr, dict) and qr.get('already'):
         _tg_connected[uid] = True
@@ -1478,12 +1468,14 @@ def auth_prepare():
 
     _qr_state[uid] = {'qr': qr, 'done': False, 'error': None}
     threading.Thread(target=_qr_wait_thread, args=(uid,), daemon=True).start()
+    phone = (user.get('phone') or '').strip()
     return jsonify({
         'ok': True,
         'step': 'qr',
         'qr_url': qr.url,
         'first_name': user.get('first_name', ''),
         'username': user.get('username', ''),
+        'masked_phone': _mask_phone(phone) if phone else '',
     })
 
 @app.route('/api/auth/qr_status')
@@ -1522,7 +1514,15 @@ def auth_send_code():
         db_save_phone(uid, phone)
         return jsonify({'ok': True})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        msg = str(e)
+        low = msg.lower()
+        if 'all available options' in low or 'resendcode' in low or 'phone code' in low:
+            msg = (
+                'تلگرام فعلاً کد جدید برای این شماره نمی‌فرستد '
+                '(سهمیه SMS/تماس تمام شده). ۱ تا چند ساعت صبر کنید، '
+                'یا با QR در اپ تلگرام لاگین کنید — دکمه ارسال کد را مکرر نزنید.'
+            )
+        return jsonify({'error': msg}), 500
 
 @app.route('/api/auth/verify_code', methods=['POST'])
 @login_required
