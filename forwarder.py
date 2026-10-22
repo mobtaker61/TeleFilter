@@ -318,18 +318,38 @@ def _format_change(current: float, previous: float | None) -> str:
 LOCAL_TZ = timezone(timedelta(hours=4))   # Asia/Dubai — هم‌راستا با rate_daily
 
 
+def _to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    """تبدیل میلادی به شمسی (الگوریتم استاندارد، بدون وابستگی)."""
+    g_d_m = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100
+            + (gy2 + 399) // 400 + gd + g_d_m[gm - 1])
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        return jy, 1 + days // 31, 1 + days % 31
+    return jy, 7 + (days - 186) // 30, 1 + (days - 186) % 30
+
+
 def _forum_rate_text(route: dict, value: float, when: datetime | None = None) -> str:
-    """متن HTML پیام نرخ: نرخ bold + تاریخ/ساعت پیام سورس (وقت دبی)."""
+    """متن HTML پیام نرخ: نرخ bold + تاریخ شمسی/میلادی و ساعت پیام سورس (وقت دبی)."""
     label = route.get('chart_label') or route.get('name') or f"Topic {route.get('topic_id')}"
     if when is None:
         when = datetime.now(timezone.utc)
     elif when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    stamp = when.astimezone(LOCAL_TZ).strftime('%Y-%m-%d  %H:%M')
+    local = when.astimezone(LOCAL_TZ)
+    jy, jm, jd = _to_jalali(local.year, local.month, local.day)
     return (
         f"آخرین نرخ {html.escape(label)}:\n"
         f"<b>{_fmt_value(value)}</b>\n"
-        f"🕒 {stamp}"
+        f"📅 {jy}/{jm:02d}/{jd:02d}  ({local:%Y-%m-%d})\n"
+        f"🕒 {local:%H:%M}"
     )
 
 
