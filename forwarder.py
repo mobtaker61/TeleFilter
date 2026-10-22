@@ -922,7 +922,10 @@ async def backfill_source(
 
     started = time.monotonic()
     filters = filters or []
-    entity = await client.get_entity(source_chat)
+    try:
+        entity = await _resolve(client, int(source_chat))
+    except (TypeError, ValueError):
+        entity = await _resolve(client, source_chat)
     peer = int(get_peer_id(entity))
 
     now_utc = datetime.now(timezone.utc)

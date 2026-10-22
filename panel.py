@@ -44,7 +44,6 @@ try:
     from telethon.tl.functions.channels import (
         CreateChannelRequest, GetFullChannelRequest, InviteToChannelRequest,
     )
-    HAS_INVITE_API = True
     from telethon.tl.types import InputChannel
     HAS_FORUM_API = True
     HAS_CREATE_CHANNEL = True
@@ -646,6 +645,9 @@ def setup_page():
 
 @app.route('/setup', methods=['POST'])
 def do_setup():
+    # فقط در اولین اجرا — پس از setup، بازنویسی bot_token/API از این مسیر ممنوع است
+    if master_ready():
+        return jsonify({'error': 'setup already done'}), 403
     d = request.get_json() or {}
     required = ('api_id', 'api_hash', 'bot_token', 'bot_username')
     if not all(d.get(k) for k in required):
@@ -1981,11 +1983,16 @@ def create_tg_topic():
 @admin_required
 def admin_list_users():
     users = db_all_users()
-    # وضعیت real-time اضافه کن
+    # وضعیت از کش حافظه — بدون connect/await تا لیست با تعداد کاربران کند نشود
     for u in users:
         uid = u['tg_id']
         u['bot_status'] = fwd_status(uid)
-        u['tg_connected'] = tg_ok(uid)
+        c = _tg_clients.get(uid)
+        try:
+            alive = bool(c is not None and c.is_connected())
+        except Exception:
+            alive = False
+        u['tg_connected'] = alive and bool(_tg_connected.get(uid))
     return jsonify({'users': users})
 
 @app.route('/api/admin/users/<int:uid>/approve', methods=['POST'])

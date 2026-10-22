@@ -220,7 +220,7 @@ def _init_stats_db():
             user_id INTEGER NOT NULL,
             group_id TEXT NOT NULL,
             topic_id INTEGER NOT NULL,
-            day TEXT NOT NULL,             -- YYYY-MM-DD (در TZ محلی، Asia/Tehran)
+            day TEXT NOT NULL,             -- YYYY-MM-DD (در TZ محلی، Asia/Dubai — LOCAL_TZ_MODIFIERS)
             avg_value REAL NOT NULL,
             min_value REAL NOT NULL,
             max_value REAL NOT NULL,
@@ -709,9 +709,11 @@ def dashboard_stats(user_id: int, group_id: str | None = None) -> dict:
     base = {'forwards_today': 0, 'forwards_total': 0, 'chart': [], 'recent_topics': []}
     if not user_id:
         return base
-    now = datetime.utcnow()
+    # «امروز» و نمودار ۷ روزه در TZ محلی (همان TZ aggregation نرخ‌ها)، نه UTC
+    now = datetime.utcnow() + timedelta(hours=4)
     today = now.strftime('%Y-%m-%d')
     week_ago = (now - timedelta(days=6)).strftime('%Y-%m-%d')
+    day = _day_expr('created_at')
     gf = ' AND group_id=?' if group_id else ''
     params_base = [user_id]
     if group_id:
@@ -723,24 +725,24 @@ def dashboard_stats(user_id: int, group_id: str | None = None) -> dict:
         ).fetchone()[0]
         if group_id:
             base['forwards_today'] = c.execute(
-                'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND group_id=? AND date(created_at)=?',
+                f'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND group_id=? AND {day}=?',
                 (user_id, group_id, today),
             ).fetchone()[0]
         else:
             base['forwards_today'] = c.execute(
-                'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND date(created_at)=?',
+                f'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND {day}=?',
                 (user_id, today),
             ).fetchone()[0]
         if group_id:
             p_week = [user_id, group_id, week_ago]
-            p_chart_where = 'user_id=? AND group_id=? AND date(created_at)>=?'
+            p_chart_where = f'user_id=? AND group_id=? AND {day}>=?'
         else:
             p_week = [user_id, week_ago]
-            p_chart_where = 'user_id=? AND date(created_at)>=?'
+            p_chart_where = f'user_id=? AND {day}>=?'
         rows = c.execute(
-            f'''SELECT date(created_at) AS d, COUNT(*) AS n
+            f'''SELECT {day} AS d, COUNT(*) AS n
                FROM forward_log WHERE {p_chart_where}
-               GROUP BY date(created_at) ORDER BY d''',
+               GROUP BY d ORDER BY d''',
             p_week,
         ).fetchall()
         by_day = {r['d']: r['n'] for r in rows}
