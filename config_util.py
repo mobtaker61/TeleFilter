@@ -82,6 +82,18 @@ def _norm_chart_days(v) -> int:
     return d if d in _VALID_CHART_DAYS else 7
 
 
+# بازه‌های زمان‌بندی پردازش تاپیک (دقیقه) — ۰ یعنی لحظه‌ای (هر پیام)
+CHECK_INTERVALS = (0, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120)
+
+
+def norm_check_interval(v) -> int:
+    try:
+        m = int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+    return m if m in CHECK_INTERVALS else 0
+
+
 def _norm_topic(t: dict) -> dict:
     try:
         max_change = float(t.get('max_change_percent', 10) or 0)
@@ -105,6 +117,7 @@ def _norm_topic(t: dict) -> dict:
         'skip_unchanged': bool(t.get('skip_unchanged', True)),
         'chart_days': _norm_chart_days(t.get('chart_days', 7)),
         'chart_order': order,
+        'check_interval': norm_check_interval(t.get('check_interval', 0)),
         'max_change_percent': max_change,
         'sources': [_norm_source(s) for s in (t.get('sources') or [])],
     }

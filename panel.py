@@ -801,6 +801,23 @@ def fwd_restart():
     rebuild_forwarder(uid)
     return jsonify({'ok': True, 'status': fwd_status(uid), **fwd.stats(uid)})
 
+@app.route('/api/forwarder/refresh', methods=['POST'])
+@login_required
+def fwd_refresh():
+    """خالی کردن صف + ری‌استارت فورواردر + پردازش آخرین پیام هر سورس."""
+    uid = cur_uid()
+    c = ensure_client(uid)
+    if not c:
+        return jsonify({'ok': False, 'msg': 'اتصال تلگرام برقرار نیست'}), 503
+    cfg = load_user_config(uid)
+    try:
+        info = tg_run(fwd.refresh_forwarder(uid, c, cfg), timeout=60)
+    except Exception as e:
+        _log_msg(uid, f"refresh failed: {e}")
+        return jsonify({'ok': False, 'msg': str(e)}), 500
+    _fwd_active[uid] = True
+    return jsonify({'ok': True, 'status': fwd_status(uid), **info, **fwd.stats(uid)})
+
 @app.route('/api/forwarder/logs')
 @login_required
 def fwd_logs():
@@ -1037,6 +1054,7 @@ def fwd_diag():
                 'forum_rate_enabled': bool(r.get('forum_rate_enabled', False)),
                 'value_regex': r.get('value_regex') or '',
                 'chart_label': r.get('chart_label') or '',
+                'interval_minutes': int(r.get('interval_minutes') or 0),
             })
     targets = [
         {'group_id': gid, 'title': getattr(ent, 'title', '') or getattr(ent, 'first_name', '') or str(gid)}

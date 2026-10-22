@@ -178,6 +178,14 @@
       cursor: pointer; width: 100%; transition: all .15s; display: flex; align-items: center; justify-content: center; gap: .4rem; }
     .btn-add-src:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
 
+    /* Processing schedule (interval) in topic detail */
+    .interval-box { background: #fff; border: 1.5px solid #e2e8f0; border-radius: 14px;
+      padding: .75rem 1.1rem; margin: .8rem 0; display: flex; align-items: center;
+      gap: .6rem; flex-wrap: wrap; font-size: .84rem; color: #334155; }
+    .interval-box i { color: #7c3aed; font-size: 1.1rem; }
+    .interval-box select { width: auto; min-width: 220px; }
+    .interval-box .form-text { flex-basis: 100%; margin: 0; }
+
     /* Chart configuration in topic detail */
     .chart-section { background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
       border: 1.5px solid #bfdbfe; border-radius: 14px; padding: 1rem 1.1rem;
@@ -382,6 +390,10 @@
     {% endif %}
     <button class="btn-topbar" onclick="openPublicShare()" title="صفحه عمومی نمودارها">
       <i class="bi bi-share-fill"></i> اشتراک عمومی
+    </button>
+    <button class="btn-topbar" id="refreshFwdBtn" onclick="refreshForwarder()"
+      title="خالی کردن صف، ری‌استارت فورواردر و پردازش آخرین پیام هر سورس">
+      <i class="bi bi-arrow-repeat"></i> ریفرش فورواردر
     </button>
     <button class="btn-save" id="saveBtn" onclick="saveAll()">
       <i class="bi bi-floppy-fill"></i> ذخیره تغییرات
