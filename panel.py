@@ -355,7 +355,7 @@ class _PanelLogHandler(logging.Handler):
     def emit(self, record):
         try:
             msg = self.format(record)
-    except Exception:
+        except Exception:
             return
         # محدود می‌کنیم به لاگ‌های مربوط به یک کاربر [uid]
         import re
