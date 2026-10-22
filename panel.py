@@ -570,7 +570,7 @@ async def _connect(uid: int):
         return
     try:
         if not c.is_connected():
-        await c.connect()
+            await c.connect()
         ok = await c.is_user_authorized()
         _tg_connected[uid] = ok
         if ok:
@@ -624,7 +624,7 @@ def ensure_client(uid: int) -> TelegramClient | None:
         return None
     try:
         if tg_run(_telegram_ready_async(uid), timeout=25):
-    return _tg_clients.get(uid)
+            return _tg_clients.get(uid)
     except Exception as e:
         print(f'[TG:{uid}] ensure_client: {e}')
     return None
