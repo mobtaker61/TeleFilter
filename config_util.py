@@ -82,18 +82,6 @@ def _norm_chart_days(v) -> int:
     return d if d in _VALID_CHART_DAYS else 7
 
 
-# بازه‌های زمان‌بندی پردازش تاپیک (دقیقه) — ۰ یعنی لحظه‌ای (هر پیام)
-CHECK_INTERVALS = (0, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120)
-
-
-def norm_check_interval(v) -> int:
-    try:
-        m = int(v or 0)
-    except (TypeError, ValueError):
-        return 0
-    return m if m in CHECK_INTERVALS else 0
-
-
 def _norm_topic(t: dict) -> dict:
     try:
         max_change = float(t.get('max_change_percent', 10) or 0)
@@ -117,7 +105,6 @@ def _norm_topic(t: dict) -> dict:
         'skip_unchanged': bool(t.get('skip_unchanged', True)),
         'chart_days': _norm_chart_days(t.get('chart_days', 7)),
         'chart_order': order,
-        'check_interval': norm_check_interval(t.get('check_interval', 0)),
         'max_change_percent': max_change,
         'sources': [_norm_source(s) for s in (t.get('sources') or [])],
     }
@@ -220,7 +207,7 @@ def _init_stats_db():
             user_id INTEGER NOT NULL,
             group_id TEXT NOT NULL,
             topic_id INTEGER NOT NULL,
-            day TEXT NOT NULL,             -- YYYY-MM-DD (در TZ محلی، Asia/Dubai — LOCAL_TZ_MODIFIERS)
+            day TEXT NOT NULL,             -- YYYY-MM-DD (در TZ محلی، Asia/Tehran)
             avg_value REAL NOT NULL,
             min_value REAL NOT NULL,
             max_value REAL NOT NULL,
@@ -709,11 +696,9 @@ def dashboard_stats(user_id: int, group_id: str | None = None) -> dict:
     base = {'forwards_today': 0, 'forwards_total': 0, 'chart': [], 'recent_topics': []}
     if not user_id:
         return base
-    # «امروز» و نمودار ۷ روزه در TZ محلی (همان TZ aggregation نرخ‌ها)، نه UTC
-    now = datetime.utcnow() + timedelta(hours=4)
+    now = datetime.utcnow()
     today = now.strftime('%Y-%m-%d')
     week_ago = (now - timedelta(days=6)).strftime('%Y-%m-%d')
-    day = _day_expr('created_at')
     gf = ' AND group_id=?' if group_id else ''
     params_base = [user_id]
     if group_id:
@@ -725,24 +710,24 @@ def dashboard_stats(user_id: int, group_id: str | None = None) -> dict:
         ).fetchone()[0]
         if group_id:
             base['forwards_today'] = c.execute(
-                f'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND group_id=? AND {day}=?',
+                'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND group_id=? AND date(created_at)=?',
                 (user_id, group_id, today),
             ).fetchone()[0]
         else:
             base['forwards_today'] = c.execute(
-                f'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND {day}=?',
+                'SELECT COUNT(*) FROM forward_log WHERE user_id=? AND date(created_at)=?',
                 (user_id, today),
             ).fetchone()[0]
         if group_id:
             p_week = [user_id, group_id, week_ago]
-            p_chart_where = f'user_id=? AND group_id=? AND {day}>=?'
+            p_chart_where = 'user_id=? AND group_id=? AND date(created_at)>=?'
         else:
             p_week = [user_id, week_ago]
-            p_chart_where = f'user_id=? AND {day}>=?'
+            p_chart_where = 'user_id=? AND date(created_at)>=?'
         rows = c.execute(
-            f'''SELECT {day} AS d, COUNT(*) AS n
+            f'''SELECT date(created_at) AS d, COUNT(*) AS n
                FROM forward_log WHERE {p_chart_where}
-               GROUP BY d ORDER BY d''',
+               GROUP BY date(created_at) ORDER BY d''',
             p_week,
         ).fetchall()
         by_day = {r['d']: r['n'] for r in rows}

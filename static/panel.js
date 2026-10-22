@@ -55,7 +55,6 @@ function buildCfgMapFromGroups(grps) {
         skip_unchanged: t.skip_unchanged !== false,
         chart_days: [1, 3, 7, 15].includes(parseInt(t.chart_days)) ? parseInt(t.chart_days) : 7,
         chart_order: Number.isFinite(parseInt(t.chart_order)) ? parseInt(t.chart_order) : 0,
-        check_interval: normCheckInterval(t.check_interval),
         max_change_percent: Number.isFinite(parseFloat(t.max_change_percent)) ? parseFloat(t.max_change_percent) : 10,
       };
     }
@@ -64,20 +63,6 @@ function buildCfgMapFromGroups(grps) {
 }
 
 function cfgKey(gid, tid) { return `${gid}:${tid}`; }
-
-// بازه‌های زمان‌بندی پردازش تاپیک (دقیقه) — ۰ = لحظه‌ای
-const CHECK_INTERVALS = [0, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120];
-
-function normCheckInterval(v) {
-  const n = parseInt(v);
-  return CHECK_INTERVALS.includes(n) ? n : 0;
-}
-
-function intervalLabel(m) {
-  if (!m) return 'لحظه‌ای — پردازش هر پیام';
-  const t = (m >= 60 && m % 60 === 0) ? `${m / 60} ساعت` : `${m} دقیقه`;
-  return `هر ${t} — فقط آخرین پیام`;
-}
 
 function groupIsForum(g) {
   if (!g) return false;
@@ -95,9 +80,7 @@ function ensureCfg() {
     forward_enabled: true, chart_message_enabled: true, public_chart_enabled: false,
     forum_rate_enabled: false,
     skip_unchanged: true, chart_days: 7, chart_order: 0, max_change_percent: 10,
-    check_interval: 0,
   };
-  if (cfgMap[k].check_interval === undefined) cfgMap[k].check_interval = 0;
   if (cfgMap[k].chart_enabled === undefined) cfgMap[k].chart_enabled = false;
   if (cfgMap[k].forward_enabled === undefined) cfgMap[k].forward_enabled = true;
   if (cfgMap[k].chart_message_enabled === undefined) cfgMap[k].chart_message_enabled = true;
@@ -908,11 +891,6 @@ function updateChartOrder(val) {
   markDirty();
 }
 
-function updateCheckInterval(val) {
-  ensureCfg().check_interval = normCheckInterval(val);
-  markDirty();
-}
-
 function updateMaxChangePct(val) {
   const v = parseFloat(val);
   ensureCfg().max_change_percent = Number.isFinite(v) && v >= 0 ? v : 0;
@@ -1277,18 +1255,6 @@ function renderTopicDetail() {
         <i class="bi bi-people me-1"></i>پروفایل گروه</button>
     </div>
 
-    <div class="interval-box">
-      <i class="bi bi-stopwatch"></i>
-      <label for="checkInterval" class="fw-bold">زمان‌بندی پردازش:</label>
-      <select id="checkInterval" class="form-select form-select-sm" onchange="updateCheckInterval(this.value)">
-        ${CHECK_INTERVALS.map(m => `<option value="${m}" ${cfg.check_interval === m ? 'selected' : ''}>${intervalLabel(m)}</option>`).join('')}
-      </select>
-      <div class="form-text">
-        در حالت زمان‌بندی‌شده، پیام‌ها تک‌به‌تک پردازش نمی‌شوند؛ در هر بازه فقط آخرین پیامِ منطبقِ هر سورس
-        بررسی می‌شود (فوروارد، ثبت نرخ و یک چارت). برای سورس‌های پرتکرار مناسب است و از صف و محدودیت تلگرام جلوگیری می‌کند.
-      </div>
-    </div>
-
     <div class="chart-section">
       <div class="chart-toggle">
         <label class="form-check form-switch m-0">
@@ -1545,7 +1511,6 @@ async function saveAll() {
     skip_unchanged: data.skip_unchanged !== false,
     chart_days: [1, 3, 7, 15].includes(parseInt(data.chart_days)) ? parseInt(data.chart_days) : 7,
     chart_order: Number.isFinite(parseInt(data.chart_order)) ? parseInt(data.chart_order) : 0,
-    check_interval: normCheckInterval(data.check_interval),
     max_change_percent: Number.isFinite(parseFloat(data.max_change_percent)) ? parseFloat(data.max_change_percent) : 10,
     sources: (data.sources || []).map(s => ({
       chat: s.chat || '',
@@ -1586,27 +1551,6 @@ async function saveAll() {
   await loadConfigFromServer();
   markClean();
   showToast('ذخیره شد ✓ — فوروارد در حال به‌روزرسانی', 'success');
-  await refreshStatus();
-}
-
-async function refreshForwarder() {
-  const dirty = document.getElementById('saveBtn').classList.contains('dirty');
-  if (dirty && !confirm('تغییرات ذخیره‌نشده دارید — ریفرش با تنظیمات ذخیره‌شده انجام می‌شود. ادامه؟')) return;
-  const btn = document.getElementById('refreshFwdBtn');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="bi bi-arrow-repeat spin"></i> در حال ریفرش…';
-  try {
-    const d = await (await fetch('/api/forwarder/refresh', { method: 'POST' })).json();
-    if (d.ok) {
-      showToast(`فورواردر ری‌استارت شد — ${d.dropped || 0} مورد از صف حذف شد؛ آخرین پیام‌ها در حال پردازش`, 'success');
-    } else {
-      showToast(d.msg || 'خطا در ریفرش فورواردر', 'danger');
-    }
-  } catch {
-    showToast('خطای شبکه', 'danger');
-  }
-  btn.disabled = false;
-  btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> ریفرش فورواردر';
   await refreshStatus();
 }
 

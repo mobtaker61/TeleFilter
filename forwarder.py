@@ -27,7 +27,6 @@ from config_util import (
     get_forum_rate_msg, save_forum_rate_msg, clear_forum_rate_msg,
     clean_text as _clean_text,
     aggregate_rate_daily, list_days_in_range,
-    norm_check_interval,
 )
 # charts را lazy لود می‌کنیم تا اگر matplotlib در سرور دچار خطا شد،
 # فوروارد عادی همچنان کار کند.
@@ -56,17 +55,6 @@ _handlers: dict[int, Any] = {}     # uid -> registered event handler callable
 _last_error: dict[int, str] = {}   # uid -> last error string
 _forum_rate_locks: dict[tuple, asyncio.Lock] = {}  # (uid,gid,tid) -> lock
 _chart_locks: dict[tuple, asyncio.Lock] = {}
-# شمارنده‌ی آخرین درخواست per topic — درخواست‌های قدیمی‌تر پشت lock کنار می‌روند (latest-wins)
-_chart_seq: dict[tuple, int] = {}
-_forum_rate_seq: dict[tuple, int] = {}
-
-# صف پردازش و حالت زمان‌بندی‌شده
-INTERVAL_TICK_SECONDS = 10
-_tasks: dict[int, set] = {}                    # uid -> task های پردازش در صف/در حال اجرا
-_interval_tasks: dict[int, asyncio.Task] = {}  # uid -> حلقه‌ی interval
-_buffer: dict[int, dict] = {}                  # uid -> {(gid, tid): {source_peer: آخرین item}}
-_last_run: dict[tuple, float] = {}             # (uid, gid, tid) -> زمان آخرین پردازش interval
-_cursor: dict[tuple, int] = {}                 # (uid, gid, tid, source_peer) -> آخرین message_id پردازش‌شده
 
 
 def _topic_lock(store: dict, uid: int, gid: str, tid: int) -> asyncio.Lock:
@@ -189,7 +177,6 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
             chart_label = str(t.get('chart_label') or t.get('name') or '')
             skip_unchanged = bool(t.get('skip_unchanged', True))
             chart_days = int(t.get('chart_days') or 7)
-            interval_minutes = norm_check_interval(t.get('check_interval'))
             try:
                 max_change_pct = float(t.get('max_change_percent', 10) or 0)
             except (TypeError, ValueError):
@@ -226,10 +213,6 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                         'chart_days': chart_days,
                         'max_change_percent': max_change_pct,
                         'clean_text': bool(s.get('clean_text', False)),
-                        'interval_minutes': interval_minutes,
-                        'source_chat': chat,
-                        'source_peer': int(get_peer_id(src_ent)),
-                        'source_entity': src_ent,
                     }
                     for k in _peer_keys(src_ent):
                         source_map.setdefault(k, []).append(route)
@@ -323,15 +306,8 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
     gid = route['gid']
     tid = route['topic_id']
     text = _forum_rate_text(route, value)
-    key = (uid, gid, int(tid))
-    seq = _forum_rate_seq.get(key, 0) + 1
-    _forum_rate_seq[key] = seq
 
     async with _forum_rate_lock(uid, gid, tid):
-        # اگر در زمان انتظار برای lock مقدار جدیدتری رسیده، این ویرایش قدیمی است
-        if _forum_rate_seq.get(key) != seq:
-            logger.debug("[%s] forum rate skipped stale value topic=%s value=%s", uid, tid, value)
-            return
         old_msg = get_forum_rate_msg(uid, gid, tid)
 
         if old_msg:
@@ -368,8 +344,36 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
             logger.error("[%s] forum rate send failed topic=%s: %s", uid, tid, e, exc_info=True)
 
 
-async def _render_chart_png(uid: int, route: dict, gid: str, tid: int) -> bytes | None:
-    """رندر تصویر چارت: ابتدا ApexCharts (Playwright)، در صورت شکست matplotlib."""
+async def _process_chart(
+    uid: int, client, route: dict, target, raw_text: str,
+    pre_parsed: tuple[float | None, str | None] | None = None,
+    previous_value: float | None = None,
+    record_value: bool = True,
+):
+    """
+    اگر برای این سورس chart فعال است:
+      1) عدد را با regex استخراج کن (اگر pre_parsed نداده شده)
+      2) در DB ذخیره کن
+      3) نمودار را رندر و ارسال کن؛ پس از موفقیت، پیام قبلی را حذف کن
+    """
+    gid = route['gid']
+    tid = route['topic_id']
+    if pre_parsed is not None:
+        value, raw_match = pre_parsed
+    else:
+        value_regex = route.get('value_regex') or None
+        text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
+        value, raw_match = parse_value(text_for_parse, value_regex)
+    if value is None:
+        logger.warning(
+            "[%s] chart: regex match failed topic=%s regex=%r sample=%r",
+            uid, tid, route.get('value_regex'), (raw_text or '')[:120],
+        )
+        return
+    if record_value:
+        record_rate(uid, gid, tid, value, raw_match or '', None)
+        logger.info("[%s] chart: value=%s recorded topic=%s", uid, value, tid)
+
     days = int(route.get('chart_days') or 7)
     title = route.get('chart_label') or f"Topic {tid}"
     png: bytes | None = None
@@ -398,7 +402,7 @@ async def _render_chart_png(uid: int, route: dict, gid: str, tid: int) -> bytes 
                 "(یا) pip install matplotlib && sudo apt-get install -y libgl1 libglib2.0-0",
                 uid,
             )
-            return None
+            return
         try:
             rates = get_rates(uid, gid, tid, since_hours=24 * days)
             png = render_rate_chart(
@@ -408,66 +412,21 @@ async def _render_chart_png(uid: int, route: dict, gid: str, tid: int) -> bytes 
             )
         except Exception as e:
             logger.error("[%s] chart render failed: %s", uid, e, exc_info=True)
-            return None
+            return
     if not png:
         logger.warning("[%s] chart render returned empty", uid)
-        return None
-    return png
-
-
-async def _process_chart(
-    uid: int, client, route: dict, target, raw_text: str,
-    pre_parsed: tuple[float | None, str | None] | None = None,
-    previous_value: float | None = None,
-    record_value: bool = True,
-):
-    """
-    اگر برای این سورس chart فعال است:
-      1) عدد را با regex استخراج کن (اگر pre_parsed نداده شده)
-      2) در DB ذخیره کن
-      3) نمودار را رندر و ارسال کن؛ پس از موفقیت، پیام قبلی را حذف کن
-    اگر در حین انتظار برای lock مقدار جدیدتری برای همین تاپیک برسد، این فراخوانی
-    بدون رندر کنار می‌رود (فقط آخرین مقدار ارسال می‌شود → صف تشکیل نمی‌شود).
-    """
-    gid = route['gid']
-    tid = route['topic_id']
-    if pre_parsed is not None:
-        value, raw_match = pre_parsed
-    else:
-        value_regex = route.get('value_regex') or None
-        text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
-        value, raw_match = parse_value(text_for_parse, value_regex)
-    if value is None:
-        logger.warning(
-            "[%s] chart: regex match failed topic=%s regex=%r sample=%r",
-            uid, tid, route.get('value_regex'), (raw_text or '')[:120],
-        )
         return
-    if record_value:
-        record_rate(uid, gid, tid, value, raw_match or '', None)
-        logger.info("[%s] chart: value=%s recorded topic=%s", uid, value, tid)
 
-    key = (uid, gid, int(tid))
-    seq = _chart_seq.get(key, 0) + 1
-    _chart_seq[key] = seq
+    last_str = _fmt_value(value)
+    change_line = _format_change(value, previous_value)
+    caption = (
+        f"📊 {route.get('chart_label') or ''}\n"
+        f"آخرین: {last_str}\n"
+        f"{change_line}"
+    ).strip()
+    named = _named_png(route.get('chart_label') or f'topic_{tid}', png)
 
     async with _chart_lock(uid, gid, tid):
-        if _chart_seq.get(key) != seq:
-            logger.info("[%s] chart: skipped stale value=%s topic=%s (newer pending)", uid, value, tid)
-            return
-        png = await _render_chart_png(uid, route, gid, tid)
-        if not png:
-            return
-
-        last_str = _fmt_value(value)
-        change_line = _format_change(value, previous_value)
-        caption = (
-            f"📊 {route.get('chart_label') or ''}\n"
-            f"آخرین: {last_str}\n"
-            f"{change_line}"
-        ).strip()
-        named = _named_png(route.get('chart_label') or f'topic_{tid}', png)
-
         old_msg = get_last_chart_msg(uid, gid, tid)
         # تلگرام روی EditMessageRequest برای تصویر محدودیت شدید دارد (FloodWait).
         # الگوی امن: ابتدا پیام جدید بفرست، سپس قبلی را حذف کن.
@@ -503,279 +462,8 @@ async def _process_chart(
                 logger.error("[%s] chart send failed topic=%s: %s", uid, tid, e, exc_info=True)
 
 
-# ══════════════════════════════════════════════════════════
-#  پردازش پیام‌ها: لحظه‌ای / زمان‌بندی‌شده (interval) / ریفرش
-# ══════════════════════════════════════════════════════════
-def _spawn(uid: int, coro) -> asyncio.Task:
-    """پردازش در task جدا تا handler تلگرام بلاک نشود و صف قابل لغو باشد."""
-    task = asyncio.get_running_loop().create_task(coro)
-    bucket = _tasks.setdefault(uid, set())
-    bucket.add(task)
-    task.add_done_callback(bucket.discard)
-    return task
-
-
-def _cancel_task(task) -> None:
-    if task is not None and not task.done():
-        # thread-safe: uninstall از thread های Flask هم صدا زده می‌شود
-        task.get_loop().call_soon_threadsafe(task.cancel)
-
-
-def cancel_pending(uid: int) -> int:
-    """
-    لغو همه‌ی پردازش‌های در صف/در حال اجرا و خالی کردن بافر interval.
-    خروجی: تعداد موارد حذف‌شده (task + پیام بافرشده).
-    """
-    n = 0
-    for t in _tasks.pop(uid, set()):
-        if not t.done():
-            _cancel_task(t)
-            n += 1
-    buf = _buffer.pop(uid, None) or {}
-    n += sum(len(v) for v in buf.values())
-    for k in [k for k in _last_run if k[0] == uid]:
-        _last_run.pop(k, None)
-    return n
-
-
-async def _process_item(uid: int, client, route: dict, target, item: dict,
-                        *, send_chart: bool = True) -> float | None:
-    """
-    پایپ‌لاین کامل یک پیام برای یک route:
-    اعتبارسنجی نرخ → ثبت → آپدیت تالار → فوروارد → (اختیاری) چارت.
-    خروجی: مقدار ثبت‌شده اگر پیام کامل پردازش شد، وگرنه None.
-    """
-    gid = route['gid']
-    tid = route['topic_id']
-    peer_id = item['peer_id']
-    raw_text = item['raw_text']
-    ckey = (uid, gid, tid, route.get('source_peer') or peer_id)
-    _cursor[ckey] = max(_cursor.get(ckey, 0), int(item['msg_id']))
-
-    use_topic = route.get('is_forum') and tid > 0
-    wants_forward = route.get('forward_enabled', True)
-    wants_chart_message = bool(route.get('chart_enabled')) and route.get('chart_message_enabled', True)
-    wants_forum_rate = (
-        bool(route.get('chart_enabled'))
-        and bool(route.get('is_forum'))
-        and bool(route.get('forum_rate_enabled'))
-    )
-    if (wants_forward or wants_chart_message or wants_forum_rate) and not target:
-        logger.warning("[%s] no target for group=%s", uid, gid)
-        return None
-
-    # ── چک‌های اعتبارسنجی نرخ ──
-    # اگر چارت فعال است، عدد را یک بار parse می‌کنیم (cache pre_parsed)
-    # و سپس دو چک می‌کنیم:
-    #   ۱) skip_unchanged: مقدار == آخرین → کامل skip (نه فوروارد، نه چارت)
-    #   ۲) max_change_percent: تغییر بیش از حد → کامل skip (outlier ضد data corruption)
-    pre_parsed = None
-    prev_value_for_caption: float | None = None
-    parsed_value: float | None = None
-    parsed_raw_match: str | None = None
-    if route.get('chart_enabled') and raw_text:
-        value_regex = route.get('value_regex') or None
-        text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
-        v, raw_match = parse_value(text_for_parse, value_regex)
-        if v is not None:
-            pre_parsed = (v, raw_match)
-            parsed_value = v
-            parsed_raw_match = raw_match
-            last = latest_rate(uid, gid, tid)
-            last_v = float(last.get('value') or 0) if last else None
-            prev_value_for_caption = last_v
-
-            # چک ۱: مقدار تکراری
-            if route.get('skip_unchanged', True) and last_v is not None and _values_equal(last_v, v):
-                logger.info(
-                    "[%s] skip unchanged: chat=%s topic=%s value=%s (= last)",
-                    uid, peer_id, tid, v,
-                )
-                return None
-
-            # چک ۲: outlier (تغییر بیش از max_change_percent)
-            max_pct = float(route.get('max_change_percent') or 0)
-            if max_pct > 0 and last_v is not None and last_v != 0:
-                change_pct = abs(v - last_v) / abs(last_v) * 100.0
-                if change_pct > max_pct:
-                    direction = '↑' if v > last_v else '↓'
-                    logger.warning(
-                        "[%s] skip outlier: chat=%s topic=%s value=%s %s %.2f%% "
-                        "(last=%s, threshold=%.1f%%)",
-                        uid, peer_id, tid, v, direction, change_pct, last_v, max_pct,
-                    )
-                    return None
-
-    if route.get('chart_enabled') and parsed_value is not None:
-        inserted = record_rate(
-            uid, gid, tid, parsed_value,
-            parsed_raw_match or '', None,
-        )
-        logger.info(
-            "[%s] chart: value=%s %s topic=%s",
-            uid, parsed_value, "recorded" if inserted else "duplicate/ignored", tid,
-        )
-        if wants_forum_rate:
-            await _update_forum_rate_message(uid, client, route, target, parsed_value)
-
-    if wants_forward:
-        try:
-            kwargs = {
-                'from_peer': item['chat'],
-                'id': [item['msg_id']],
-                'to_peer': target,
-                'random_id': [random.randint(1, 2**63 - 1)],
-            }
-            if use_topic:
-                kwargs['top_msg_id'] = tid
-            await client(ForwardMessagesRequest(**kwargs))
-            record_forward(uid, gid, tid if use_topic else 0, peer_id)
-            logger.info(
-                "[%s] forwarded chat=%s msg=%s → group=%s topic=%s",
-                uid, peer_id, item['msg_id'], gid, tid if use_topic else '-',
-            )
-        except Exception as e:
-            err = f"forward fail (chat={peer_id} group={gid} topic={tid}): {e}"
-            _last_error[uid] = err
-            logger.error("[%s] %s", uid, err)
-            return None
-    else:
-        logger.info("[%s] forward disabled: chat=%s topic=%s", uid, peer_id, tid)
-
-    if send_chart and wants_chart_message and raw_text:
-        try:
-            await _process_chart(
-                uid, client, route, target, raw_text,
-                pre_parsed=pre_parsed,
-                previous_value=prev_value_for_caption,
-                record_value=False,
-            )
-        except Exception as e:
-            logger.error("[%s] chart pipeline failed: %s", uid, e)
-    return parsed_value
-
-
-async def _run_immediate(uid: int, client, items: list[dict]):
-    """حالت لحظه‌ای: هر پیام منطبق، کامل پردازش می‌شود."""
-    targets = (_routes.get(uid) or {}).get('targets') or {}
-    for item in items:
-        route = item['route']
-        try:
-            await _process_item(uid, client, route, targets.get(route['gid']), item)
-        except Exception as e:
-            logger.error("[%s] process failed topic=%s: %s", uid, route.get('topic_id'), e, exc_info=True)
-
-
-async def _run_topic_batch(uid: int, client, items: list[dict], reason: str):
-    """
-    پردازش دسته‌ای آخرین پیام سورس‌های یک تاپیک (interval / refresh).
-    هر پیام ثبت/فوروارد می‌شود ولی چارت فقط یک بار، برای جدیدترین مقدار، ارسال می‌شود.
-    """
-    if not items:
-        return
-    items = sorted(items, key=lambda it: it['date'].timestamp() if it.get('date') else 0)
-    route0 = items[0]['route']
-    gid, tid = route0['gid'], route0['topic_id']
-    if route0.get('interval_minutes'):
-        _last_run[(uid, gid, tid)] = time.monotonic()
-    target = ((_routes.get(uid) or {}).get('targets') or {}).get(gid)
-    prev = latest_rate(uid, gid, tid) if route0.get('chart_enabled') else None
-    prev_v = float(prev['value']) if prev else None
-
-    last: tuple[dict, float] | None = None
-    for it in items:
-        try:
-            v = await _process_item(uid, client, it['route'], target, it, send_chart=False)
-        except Exception as e:
-            logger.error("[%s] %s: process failed topic=%s: %s", uid, reason, tid, e, exc_info=True)
-            continue
-        if v is not None:
-            last = (it, v)
-
-    logger.info("[%s] %s: topic=%s processed %d latest message(s)", uid, reason, tid, len(items))
-    if last and route0.get('chart_enabled') and route0.get('chart_message_enabled', True):
-        it, v = last
-        try:
-            await _process_chart(
-                uid, client, it['route'], target, it['raw_text'],
-                pre_parsed=(v, None), previous_value=prev_v, record_value=False,
-            )
-        except Exception as e:
-            logger.error("[%s] chart pipeline failed: %s", uid, e)
-
-
-async def _interval_loop(uid: int, client):
-    """هر چند ثانیه بافر تاپیک‌های زمان‌بندی‌شده را چک و موارد سررسیده را پردازش می‌کند."""
-    while True:
-        await asyncio.sleep(INTERVAL_TICK_SECONDS)
-        buf = _buffer.get(uid)
-        if not buf:
-            continue
-        now = time.monotonic()
-        for key in list(buf.keys()):
-            items = buf.get(key)
-            if not items:
-                continue
-            interval = int(next(iter(items.values()))['route'].get('interval_minutes') or 0)
-            last_run = _last_run.get((uid,) + key)
-            if interval and last_run is not None and now - last_run < interval * 60:
-                continue
-            buf.pop(key, None)
-            _last_run[(uid,) + key] = now
-            _spawn(uid, _run_topic_batch(uid, client, list(items.values()), 'interval'))
-
-
-async def catch_up_latest(uid: int, client, scan_limit: int = 30) -> dict:
-    """
-    برای هر سورس، آخرین پیامِ منطبق با فیلترها را واکشی و پردازش می‌کند.
-    پیام‌هایی که قبلاً پردازش شده‌اند (بر اساس message_id) رد می‌شوند.
-    """
-    data = _routes.get(uid)
-    if not data:
-        return {'topics': 0, 'messages': 0}
-    batches: dict[tuple, list] = {}
-    seen: set[int] = set()
-    for entries in list(data['source_map'].values()):
-        for route in entries:
-            if id(route) in seen:
-                continue
-            seen.add(id(route))
-            ent = route.get('source_entity')
-            if ent is None:
-                continue
-            try:
-                msgs = await client.get_messages(ent, limit=scan_limit)
-            except Exception as e:
-                logger.warning("[%s] refresh: fetch %r failed: %s", uid, route.get('source_chat'), e)
-                continue
-            filters = route.get('filters') or []
-            pick = None
-            for m in msgs or []:  # جدیدترین اول
-                if getattr(m, 'action', None) is not None:
-                    continue
-                if _matches((m.text or m.message or '').lower(), filters):
-                    pick = m
-                    break
-            if pick is None:
-                continue
-            peer = route.get('source_peer') or 0
-            if int(pick.id) <= _cursor.get((uid, route['gid'], route['topic_id'], peer), 0):
-                continue
-            batches.setdefault((route['gid'], route['topic_id']), []).append({
-                'route': route, 'chat': ent, 'msg_id': int(pick.id), 'peer_id': peer,
-                'raw_text': pick.text or pick.message or '', 'date': pick.date,
-            })
-
-    n = 0
-    for items in batches.values():
-        await _run_topic_batch(uid, client, items, 'refresh')
-        n += len(items)
-    logger.info("[%s] refresh: caught up %d latest message(s) across %d topic(s)", uid, n, len(batches))
-    return {'topics': len(batches), 'messages': n}
-
-
 def install_handler(uid: int, client):
-    """نصب یا جایگزینی NewMessage handler و حلقه‌ی interval برای کاربر."""
+    """نصب یا جایگزینی NewMessage handler برای کاربر."""
     old = _handlers.get(uid)
     if old is not None:
         try:
@@ -783,13 +471,13 @@ def install_handler(uid: int, client):
         except Exception:
             pass
         _handlers.pop(uid, None)
-    _cancel_task(_interval_tasks.pop(uid, None))
 
     async def _handler(event):
         data = _routes.get(uid)
         if not data:
             return
         source_map = data['source_map']
+        targets = data['targets']
         if not source_map:
             return
 
@@ -811,26 +499,115 @@ def install_handler(uid: int, client):
         raw_text = (event.message.text or event.message.message or '')
         text_lower = raw_text.lower()
 
-        immediate: list[dict] = []
         for route in entries:
             if not _matches(text_lower, route.get('filters') or []):
                 continue
-            item = {
-                'route': route, 'chat': event.chat_id, 'msg_id': int(event.message.id),
-                'peer_id': peer_id, 'raw_text': raw_text, 'date': event.message.date,
-            }
-            if route.get('interval_minutes'):
-                # حالت زمان‌بندی‌شده: فقط آخرین پیام هر سورس نگه داشته می‌شود
-                key = (route['gid'], route['topic_id'])
-                _buffer.setdefault(uid, {}).setdefault(key, {})[route.get('source_peer') or peer_id] = item
+            gid = route['gid']
+            tid = route['topic_id']
+            use_topic = route.get('is_forum') and tid > 0
+            target = targets.get(gid)
+            wants_forward = route.get('forward_enabled', True)
+            wants_chart_message = bool(route.get('chart_enabled')) and route.get('chart_message_enabled', True)
+            wants_forum_rate = (
+                bool(route.get('chart_enabled'))
+                and bool(route.get('is_forum'))
+                and bool(route.get('forum_rate_enabled'))
+            )
+            if (wants_forward or wants_chart_message or wants_forum_rate) and not target:
+                logger.warning("[%s] no target for group=%s", uid, gid)
+                continue
+
+            # ── چک‌های اعتبارسنجی نرخ ──
+            # اگر چارت فعال است، عدد را یک بار parse می‌کنیم (cache pre_parsed)
+            # و سپس دو چک می‌کنیم:
+            #   ۱) skip_unchanged: مقدار == آخرین → کامل skip (نه فوروارد، نه چارت)
+            #   ۲) max_change_percent: تغییر بیش از حد → کامل skip (outlier ضد data corruption)
+            pre_parsed = None
+            prev_value_for_caption: float | None = None
+            parsed_value: float | None = None
+            parsed_raw_match: str | None = None
+            if route.get('chart_enabled') and raw_text:
+                value_regex = route.get('value_regex') or None
+                text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
+                v, raw_match = parse_value(text_for_parse, value_regex)
+                if v is not None:
+                    pre_parsed = (v, raw_match)
+                    parsed_value = v
+                    parsed_raw_match = raw_match
+                    last = latest_rate(uid, gid, tid)
+                    last_v = float(last.get('value') or 0) if last else None
+                    prev_value_for_caption = last_v
+
+                    # چک ۱: مقدار تکراری
+                    if route.get('skip_unchanged', True) and last_v is not None and _values_equal(last_v, v):
+                        logger.info(
+                            "[%s] skip unchanged: chat=%s topic=%s value=%s (= last)",
+                            uid, peer_id, tid, v,
+                        )
+                        continue
+
+                    # چک ۲: outlier (تغییر بیش از max_change_percent)
+                    max_pct = float(route.get('max_change_percent') or 0)
+                    if max_pct > 0 and last_v is not None and last_v != 0:
+                        change_pct = abs(v - last_v) / abs(last_v) * 100.0
+                        if change_pct > max_pct:
+                            direction = '↑' if v > last_v else '↓'
+                            logger.warning(
+                                "[%s] skip outlier: chat=%s topic=%s value=%s %s %.2f%% "
+                                "(last=%s, threshold=%.1f%%)",
+                                uid, peer_id, tid, v, direction, change_pct, last_v, max_pct,
+                            )
+                            continue
+
+            if route.get('chart_enabled') and parsed_value is not None:
+                inserted = record_rate(
+                    uid, gid, tid, parsed_value,
+                    parsed_raw_match or '', None,
+                )
+                logger.info(
+                    "[%s] chart: value=%s %s topic=%s",
+                    uid, parsed_value, "recorded" if inserted else "duplicate/ignored", tid,
+                )
+                if wants_forum_rate:
+                    await _update_forum_rate_message(uid, client, route, target, parsed_value)
+
+            if wants_forward:
+                try:
+                    kwargs = {
+                        'from_peer': event.chat_id,
+                        'id': [event.message.id],
+                        'to_peer': target,
+                        'random_id': [random.randint(1, 2**63 - 1)],
+                    }
+                    if use_topic:
+                        kwargs['top_msg_id'] = tid
+                    await client(ForwardMessagesRequest(**kwargs))
+                    record_forward(uid, gid, tid if use_topic else 0, peer_id)
+                    logger.info(
+                        "[%s] forwarded chat=%s msg=%s → group=%s topic=%s",
+                        uid, peer_id, event.message.id, gid, tid if use_topic else '-',
+                    )
+                except Exception as e:
+                    err = f"forward fail (chat={peer_id} group={gid} topic={tid}): {e}"
+                    _last_error[uid] = err
+                    logger.error("[%s] %s", uid, err)
+                    continue
             else:
-                immediate.append(item)
-        if immediate:
-            _spawn(uid, _run_immediate(uid, client, immediate))
+                logger.info("[%s] forward disabled: chat=%s topic=%s", uid, peer_id, tid)
+
+            if wants_chart_message and raw_text:
+                try:
+                    await _process_chart(
+                        uid, client, route, target, raw_text,
+                        pre_parsed=pre_parsed,
+                        previous_value=prev_value_for_caption,
+                        record_value=False,
+                    )
+                except Exception as e:
+                    logger.error("[%s] chart pipeline failed: %s", uid, e)
 
     client.add_event_handler(_handler, events.NewMessage(incoming=True))
     _handlers[uid] = _handler
-    _interval_tasks[uid] = asyncio.get_running_loop().create_task(_interval_loop(uid, client))
     logger.info("[%s] handler installed", uid)
 
 
@@ -841,8 +618,6 @@ def uninstall_handler(uid: int, client):
             client.remove_event_handler(old)
         except Exception:
             pass
-    _cancel_task(_interval_tasks.pop(uid, None))
-    cancel_pending(uid)
 
 
 def status(uid: int) -> str:
@@ -860,8 +635,6 @@ def stats(uid: int) -> dict:
         'routes': sum(len(v) for v in data['source_map'].values()),
         'sources_peers': len(data['source_map']),
         'targets': len(data['targets']),
-        'pending_tasks': sum(1 for t in _tasks.get(uid, ()) if not t.done()),
-        'buffered': sum(len(v) for v in (_buffer.get(uid) or {}).values()),
         'last_error': _last_error.get(uid, ''),
     }
 
@@ -870,19 +643,6 @@ async def rebuild_and_install(uid: int, client, cfg: dict):
     """ترکیبی: build routes + install handler — برای فراخوانی پس از connect یا save config."""
     await build_routes(uid, client, cfg)
     install_handler(uid, client)
-
-
-async def refresh_forwarder(uid: int, client, cfg: dict) -> dict:
-    """
-    ریفرش: خالی کردن صف و بافر + rebuild فورواردر + پردازش آخرین پیام هر سورس
-    (catch-up در پس‌زمینه اجرا می‌شود تا درخواست پنل منتظر نماند).
-    """
-    dropped = cancel_pending(uid)
-    await asyncio.sleep(0)  # اجازه بده cancel ها اعمال شوند
-    await rebuild_and_install(uid, client, cfg)
-    _spawn(uid, catch_up_latest(uid, client))
-    logger.info("[%s] forwarder refreshed: %d queued item(s) dropped", uid, dropped)
-    return {'dropped': dropped}
 
 
 # ══════════════════════════════════════════════════════════
@@ -922,10 +682,7 @@ async def backfill_source(
 
     started = time.monotonic()
     filters = filters or []
-    try:
-        entity = await _resolve(client, int(source_chat))
-    except (TypeError, ValueError):
-        entity = await _resolve(client, source_chat)
+    entity = await client.get_entity(source_chat)
     peer = int(get_peer_id(entity))
 
     now_utc = datetime.now(timezone.utc)
