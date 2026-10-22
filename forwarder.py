@@ -318,6 +318,9 @@ def _format_change(current: float, previous: float | None) -> str:
 LOCAL_TZ = timezone(timedelta(hours=4))   # Asia/Dubai — هم‌راستا با rate_daily
 
 
+_FA_DIGITS = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
+
+
 def _to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
     """تبدیل میلادی به شمسی (الگوریتم استاندارد، بدون وابستگی)."""
     g_d_m = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
@@ -348,7 +351,7 @@ def _forum_rate_text(route: dict, value: float, when: datetime | None = None) ->
     return (
         f"آخرین نرخ {html.escape(label)}:\n"
         f"<b>{_fmt_value(value)}</b>\n"
-        f"📅 {jy}/{jm:02d}/{jd:02d}  ({local:%Y-%m-%d})\n"
+        f"📅 {f'{jy}/{jm:02d}/{jd:02d}'.translate(_FA_DIGITS)}  ({local:%Y-%m-%d})\n"
         f"🕒 {local:%H:%M}"
     )
 
