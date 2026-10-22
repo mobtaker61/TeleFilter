@@ -220,7 +220,7 @@ function renderChart(rates, label, mode) {
           html += `<div style="margin-top:6px; padding-top:6px; border-top:1px solid #e2e8f0; font-size:11px; color:#475569">`;
           html += `<div>کمینه: <b>${fmtNum(p.minVal)}</b></div>`;
           html += `<div>بیشینه: <b>${fmtNum(p.maxVal)}</b></div>`;
-          if (p.samples) html += `<div style="color:#94a3b8">۲${p.samples} نمونه</div>`.replace('۲', '');
+          if (p.samples) html += `<div style="color:#94a3b8">${p.samples} نمونه</div>`;
           html += `</div>`;
         }
         html += `</div>`;
