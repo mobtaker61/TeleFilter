@@ -8,11 +8,13 @@ In-process forwarder.
 from __future__ import annotations
 
 import asyncio
+import html
 import io
 import logging
 import random
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from telethon import events
@@ -313,16 +315,30 @@ def _format_change(current: float, previous: float | None) -> str:
     return f'{emoji} {sign}{_fmt_value(diff)} ({sign}{pct:.2f}%)'
 
 
-def _forum_rate_text(route: dict, value: float) -> str:
+LOCAL_TZ = timezone(timedelta(hours=4))   # Asia/Dubai — هم‌راستا با rate_daily
+
+
+def _forum_rate_text(route: dict, value: float, when: datetime | None = None) -> str:
+    """متن HTML پیام نرخ: نرخ bold + تاریخ/ساعت پیام سورس (وقت دبی)."""
     label = route.get('chart_label') or route.get('name') or f"Topic {route.get('topic_id')}"
-    return f"آخرین نرخ {label}:\n{_fmt_value(value)}"
+    if when is None:
+        when = datetime.now(timezone.utc)
+    elif when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    stamp = when.astimezone(LOCAL_TZ).strftime('%Y-%m-%d  %H:%M')
+    return (
+        f"آخرین نرخ {html.escape(label)}:\n"
+        f"<b>{_fmt_value(value)}</b>\n"
+        f"🕒 {stamp}"
+    )
 
 
-async def _update_forum_rate_message(uid: int, client, route: dict, target, value: float):
+async def _update_forum_rate_message(uid: int, client, route: dict, target, value: float,
+                                     when: datetime | None = None):
     """یک پیام ثابت برای نرخ این تاپیک در General topic ایجاد یا ویرایش می‌کند."""
     gid = route['gid']
     tid = route['topic_id']
-    text = _forum_rate_text(route, value)
+    text = _forum_rate_text(route, value, when)
     key = (uid, gid, int(tid))
     seq = _forum_rate_seq.get(key, 0) + 1
     _forum_rate_seq[key] = seq
@@ -336,7 +352,7 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
 
         if old_msg:
             try:
-                await client.edit_message(target, int(old_msg), text)
+                await client.edit_message(target, int(old_msg), text, parse_mode='html')
                 logger.info("[%s] forum rate updated topic=%s msg=%s", uid, tid, old_msg)
                 return
             except MessageNotModifiedError:
@@ -358,7 +374,8 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
                     return
 
         try:
-            sent = await client.send_message(target, text, reply_to=GENERAL_TOPIC_ID)
+            sent = await client.send_message(target, text, reply_to=GENERAL_TOPIC_ID,
+                                             parse_mode='html')
             if sent and hasattr(sent, 'id'):
                 save_forum_rate_msg(uid, gid, tid, int(sent.id))
                 logger.info("[%s] forum rate created topic=%s msg=%s", uid, tid, sent.id)
@@ -616,7 +633,8 @@ async def _process_item(uid: int, client, route: dict, target, item: dict,
             uid, parsed_value, "recorded" if inserted else "duplicate/ignored", tid,
         )
         if wants_forum_rate:
-            await _update_forum_rate_message(uid, client, route, target, parsed_value)
+            await _update_forum_rate_message(uid, client, route, target, parsed_value,
+                                             item.get('date'))
 
     if wants_forward:
         try:
