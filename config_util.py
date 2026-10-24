@@ -214,6 +214,19 @@ def _init_stats_db():
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, group_id, topic_id)
         )''')
+        # روز محلی (YYYY-MM-DD) پیام نرخ — با شروع روز جدید پیام تازه ساخته می‌شود
+        cols = {r[1] for r in c.execute("PRAGMA table_info(forum_rate_message)").fetchall()}
+        if 'day' not in cols:
+            c.execute('ALTER TABLE forum_rate_message ADD COLUMN day TEXT')
+        # پیام سرتیتر تاریخ هر روز در General topic
+        c.execute('''CREATE TABLE IF NOT EXISTS forum_day_header (
+            user_id INTEGER NOT NULL,
+            group_id TEXT NOT NULL,
+            day TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, group_id, day)
+        )''')
         # ── Daily aggregation برای نمودارهای طولانی (>7 روز) ──
         # برای هر روز کاری یک ردیف: میانگین + min/max + open/close + count
         c.execute('''CREATE TABLE IF NOT EXISTS rate_daily (
@@ -634,23 +647,44 @@ def clear_last_chart_msg(user_id: int, group_id: str, topic_id: int):
         c.commit()
 
 
-def get_forum_rate_msg(user_id: int, group_id: str, topic_id: int) -> int | None:
+def get_forum_rate_msg(user_id: int, group_id: str, topic_id: int) -> tuple[int, str | None] | None:
+    """(message_id, day) آخرین پیام نرخ این تاپیک."""
     with sqlite3.connect(DB_PATH) as c:
         r = c.execute(
-            'SELECT message_id FROM forum_rate_message WHERE user_id=? AND group_id=? AND topic_id=?',
+            'SELECT message_id, day FROM forum_rate_message WHERE user_id=? AND group_id=? AND topic_id=?',
             (user_id, group_id, int(topic_id)),
+        ).fetchone()
+        return (int(r[0]), r[1]) if r else None
+
+
+def save_forum_rate_msg(user_id: int, group_id: str, topic_id: int, message_id: int,
+                        day: str | None = None):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            'INSERT INTO forum_rate_message (user_id, group_id, topic_id, message_id, day, updated_at)'
+            ' VALUES (?,?,?,?,?,CURRENT_TIMESTAMP)'
+            ' ON CONFLICT(user_id,group_id,topic_id) DO UPDATE SET'
+            ' message_id=excluded.message_id, day=excluded.day, updated_at=CURRENT_TIMESTAMP',
+            (user_id, group_id, int(topic_id), int(message_id), day),
+        )
+        c.commit()
+
+
+def get_forum_day_header(user_id: int, group_id: str, day: str) -> int | None:
+    with sqlite3.connect(DB_PATH) as c:
+        r = c.execute(
+            'SELECT message_id FROM forum_day_header WHERE user_id=? AND group_id=? AND day=?',
+            (user_id, group_id, day),
         ).fetchone()
         return int(r[0]) if r else None
 
 
-def save_forum_rate_msg(user_id: int, group_id: str, topic_id: int, message_id: int):
+def save_forum_day_header(user_id: int, group_id: str, day: str, message_id: int):
     with sqlite3.connect(DB_PATH) as c:
         c.execute(
-            'INSERT INTO forum_rate_message (user_id, group_id, topic_id, message_id, updated_at)'
-            ' VALUES (?,?,?,?,CURRENT_TIMESTAMP)'
-            ' ON CONFLICT(user_id,group_id,topic_id) DO UPDATE SET'
-            ' message_id=excluded.message_id, updated_at=CURRENT_TIMESTAMP',
-            (user_id, group_id, int(topic_id), int(message_id)),
+            'INSERT OR REPLACE INTO forum_day_header (user_id, group_id, day, message_id)'
+            ' VALUES (?,?,?,?)',
+            (user_id, group_id, day, int(message_id)),
         )
         c.commit()
 

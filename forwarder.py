@@ -27,6 +27,7 @@ from config_util import (
     parse_value, record_rate, get_rates, get_rates_smart, latest_rate,
     get_last_chart_msg, save_last_chart_msg,
     get_forum_rate_msg, save_forum_rate_msg, clear_forum_rate_msg,
+    get_forum_day_header, save_forum_day_header,
     clean_text as _clean_text,
     aggregate_rate_daily, list_days_in_range,
     norm_check_interval,
@@ -57,6 +58,7 @@ _routes: dict[int, dict] = {}      # uid -> {'source_map', 'targets', 'forum'}
 _handlers: dict[int, Any] = {}     # uid -> registered event handler callable
 _last_error: dict[int, str] = {}   # uid -> last error string
 _forum_rate_locks: dict[tuple, asyncio.Lock] = {}  # (uid,gid,tid) -> lock
+_forum_day_locks: dict[tuple, asyncio.Lock] = {}   # (uid,gid,GENERAL) -> lock سرتیتر روز
 _chart_locks: dict[tuple, asyncio.Lock] = {}
 # شمارنده‌ی آخرین درخواست per topic — درخواست‌های قدیمی‌تر پشت lock کنار می‌روند (latest-wins)
 _chart_seq: dict[tuple, int] = {}
@@ -339,29 +341,61 @@ def _to_jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
     return jy, 7 + (days - 186) // 30, 1 + (days - 186) % 30
 
 
-def _forum_rate_text(route: dict, value: float, when: datetime | None = None) -> str:
-    """متن HTML پیام نرخ: نرخ bold + تاریخ شمسی/میلادی و ساعت پیام سورس (وقت دبی)."""
-    label = route.get('chart_label') or route.get('name') or f"Topic {route.get('topic_id')}"
+_FA_WEEKDAYS = ('دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه', 'شنبه', 'یکشنبه')
+
+
+def _local_time(when: datetime | None) -> datetime:
     if when is None:
         when = datetime.now(timezone.utc)
     elif when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    local = when.astimezone(LOCAL_TZ)
+    return when.astimezone(LOCAL_TZ)
+
+
+def _forum_day_header_text(local: datetime) -> str:
+    """سرتیتر روز: روز هفته + تاریخ شمسی و میلادی."""
     jy, jm, jd = _to_jalali(local.year, local.month, local.day)
+    return (
+        f"📅 <b>{_FA_WEEKDAYS[local.weekday()]} "
+        f"{f'{jy}/{jm:02d}/{jd:02d}'.translate(_FA_DIGITS)}</b>\n"
+        f"🗓 {local:%A %Y-%m-%d}"
+    )
+
+
+def _forum_rate_text(route: dict, local: datetime, value: float) -> str:
+    """متن HTML پیام نرخ: عنوان + نرخ bold + ساعت پیام سورس (وقت دبی)."""
+    label = route.get('chart_label') or route.get('name') or f"Topic {route.get('topic_id')}"
     return (
         f"آخرین نرخ {html.escape(label)}:\n"
         f"<b>{_fmt_value(value)}</b>\n"
-        f"📅 {f'{jy}/{jm:02d}/{jd:02d}'.translate(_FA_DIGITS)}  ({local:%Y-%m-%d})\n"
         f"🕒 {local:%H:%M}"
     )
 
 
+async def _ensure_forum_day_header(uid: int, client, gid: str, target, local: datetime):
+    """در اولین نرخ هر روز، پیام سرتیتر تاریخ را (یک‌بار برای گروه) در General می‌فرستد."""
+    day = local.strftime('%Y-%m-%d')
+    async with _topic_lock(_forum_day_locks, uid, gid, GENERAL_TOPIC_ID):
+        if get_forum_day_header(uid, gid, day):
+            return
+        try:
+            sent = await client.send_message(target, _forum_day_header_text(local),
+                                             reply_to=GENERAL_TOPIC_ID, parse_mode='html')
+            if sent and hasattr(sent, 'id'):
+                save_forum_day_header(uid, gid, day, int(sent.id))
+                logger.info("[%s] forum day header created day=%s msg=%s", uid, day, sent.id)
+        except Exception as e:
+            logger.warning("[%s] forum day header send failed day=%s: %s", uid, day, e)
+
+
 async def _update_forum_rate_message(uid: int, client, route: dict, target, value: float,
                                      when: datetime | None = None):
-    """یک پیام ثابت برای نرخ این تاپیک در General topic ایجاد یا ویرایش می‌کند."""
+    """برای هر روز و هر تاپیک یک پیام نرخ در General: در طول روز ویرایش، روز بعد پیام جدید."""
     gid = route['gid']
     tid = route['topic_id']
-    text = _forum_rate_text(route, value, when)
+    local = _local_time(when)
+    day = local.strftime('%Y-%m-%d')
+    text = _forum_rate_text(route, local, value)
     key = (uid, gid, int(tid))
     seq = _forum_rate_seq.get(key, 0) + 1
     _forum_rate_seq[key] = seq
@@ -371,7 +405,15 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
         if _forum_rate_seq.get(key) != seq:
             logger.debug("[%s] forum rate skipped stale value topic=%s value=%s", uid, tid, value)
             return
-        old_msg = get_forum_rate_msg(uid, gid, tid)
+        row = get_forum_rate_msg(uid, gid, tid)
+        old_msg, old_day = row if row else (None, None)
+        if old_msg and old_day and old_day > day:
+            # پیام سورسِ قدیمی‌تر از پیام فعلی روز — آرشیو روز قبل را دست نمی‌زنیم
+            logger.debug("[%s] forum rate skipped past-day value topic=%s day=%s", uid, tid, day)
+            return
+        if old_msg and old_day != day:
+            # روز جدید: پیام دیروز به‌عنوان آرشیو می‌ماند و پیام تازه ساخته می‌شود
+            old_msg = None
 
         if old_msg:
             try:
@@ -396,11 +438,12 @@ async def _update_forum_rate_message(uid: int, client, route: dict, target, valu
                     logger.warning("[%s] forum rate edit failed topic=%s msg=%s: %s", uid, tid, old_msg, e)
                     return
 
+        await _ensure_forum_day_header(uid, client, gid, target, local)
         try:
             sent = await client.send_message(target, text, reply_to=GENERAL_TOPIC_ID,
                                              parse_mode='html')
             if sent and hasattr(sent, 'id'):
-                save_forum_rate_msg(uid, gid, tid, int(sent.id))
+                save_forum_rate_msg(uid, gid, tid, int(sent.id), day)
                 logger.info("[%s] forum rate created topic=%s msg=%s", uid, tid, sent.id)
             else:
                 logger.warning("[%s] forum rate sent but no id returned: %r", uid, sent)
