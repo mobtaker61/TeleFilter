@@ -31,19 +31,14 @@ async function loadConfigFromServer() {
   const cfg = await (await fetch('/api/config')).json();
   groups = cfg.groups || [];
   cfgMap = buildCfgMapFromGroups(groups);
+  await loadApiConnections();
 }
 
 function buildCfgMapFromGroups(grps) {
   const m = {};
   for (const g of grps) {
     for (const t of g.topics || []) {
-      const sources = (t.sources || []).map(s => ({
-        chat: s.chat || '',
-        filters: normalizeFilters(s.filters),
-        value_regex: s.value_regex || '',
-        enabled: s.enabled !== false,
-        clean_text: !!s.clean_text,
-      }));
+      const sources = (t.sources || []).map(s => serializeSource({ ...s, filters: normalizeFilters(s.filters) }));
       m[cfgKey(g.id, t.topic_id)] = {
         sources,
         chart_enabled: !!t.chart_enabled,
@@ -64,6 +59,25 @@ function buildCfgMapFromGroups(grps) {
 }
 
 function cfgKey(gid, tid) { return `${gid}:${tid}`; }
+
+// سورس تلگرام یا API — فیلدهای API فقط برای type=api نگه داشته می‌شوند
+function serializeSource(s) {
+  const out = {
+    type: s.type === 'api' ? 'api' : 'telegram',
+    chat: s.chat || '',
+    filters: s.filters || [],
+    value_regex: s.value_regex || '',
+    enabled: s.enabled !== false,
+    clean_text: !!s.clean_text,
+  };
+  if (out.type === 'api') {
+    out.connection = s.connection || '';
+    out.endpoint = s.endpoint || '';
+    out.value_path = s.value_path || '';
+    out.time_path = s.time_path || '';
+  }
+  return out;
+}
 
 // بازه‌های زمان‌بندی پردازش تاپیک (دقیقه) — ۰ = لحظه‌ای
 const CHECK_INTERVALS = [0, 1, 2, 5, 10, 15, 30, 45, 60, 90, 120];
@@ -842,6 +856,232 @@ function addSource() {
   markDirty();
 }
 
+async function addApiSource() {
+  await loadApiConnections();
+  if (!apiConns.length) {
+    showToast('اول یک اتصال API بسازید', 'warning');
+    openApiConnections();
+    return;
+  }
+  const c = apiConns[0];
+  const p = apiPresets[c.provider] || {};
+  ensureCfg().sources.push({
+    type: 'api', chat: '', filters: [], value_regex: '', enabled: true, clean_text: false,
+    connection: c.id, endpoint: p.endpoint || '', value_path: p.value_path || '', time_path: p.time_path || '',
+  });
+  renderTopicDetail();
+  markDirty();
+}
+
+function updateApiSource(si, field, val) {
+  const src = ensureCfg().sources[si];
+  src[field] = val;
+  if (field === 'connection') {
+    // پیش‌فرض‌های سرویس جدید را در فیلدهای خالی پر کن
+    const c = apiConns.find(x => x.id === val);
+    const p = (c && apiPresets[c.provider]) || {};
+    for (const k of ['endpoint', 'value_path', 'time_path']) if (!src[k] && p[k]) src[k] = p[k];
+    renderTopicDetail();
+  }
+  markDirty();
+}
+
+function renderApiSourceCard(src, si, isEnabled, cfg) {
+  const conn = apiConns.find(c => c.id === src.connection);
+  const opts = apiConns.map(c =>
+    `<option value="${esc(c.id)}" ${c.id === src.connection ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const minutes = normCheckInterval(cfg.check_interval) || apiDefaultPoll;
+  const warn = !cfg.chart_enabled
+    ? `<div class="small text-warning mt-1"><i class="bi bi-exclamation-triangle me-1"></i>برای ثبت نرخ، چارت و تالار نرخ‌ها، «چارت» تاپیک را روشن کنید.</div>` : '';
+  return `
+      <div class="source-card ${isEnabled ? '' : 'disabled'}">
+        <div class="src-top">
+          <label class="src-toggle form-check form-switch m-0">
+            <input class="form-check-input" type="checkbox" ${isEnabled ? 'checked' : ''}
+                   onchange="toggleSourceEnabled(${si}, this.checked)">
+          </label>
+          <i class="bi bi-plug-fill text-success"></i>
+          <select class="form-select form-select-sm" onchange="updateApiSource(${si}, 'connection', this.value)">
+            ${conn ? '' : '<option value="">— اتصال را انتخاب کنید —</option>'}${opts}
+          </select>
+          <button class="src-del" onclick="deleteSource(${si})"><i class="bi bi-x-circle-fill"></i></button>
+        </div>
+        <div class="src-regex">
+          <div class="row g-2">
+            <div class="col-12">
+              <label class="small text-muted mb-1">Endpoint (مسیر یا آدرس کامل)</label>
+              <input class="form-control form-control-sm" dir="ltr" value="${esc(src.endpoint || '')}"
+                     oninput="updateApiSource(${si}, 'endpoint', this.value)" placeholder="/price/XAU/USD">
+            </div>
+            <div class="col-6">
+              <label class="small text-muted mb-1">فیلد عدد در JSON</label>
+              <input class="form-control form-control-sm" dir="ltr" value="${esc(src.value_path || '')}"
+                     oninput="updateApiSource(${si}, 'value_path', this.value)" placeholder="price">
+            </div>
+            <div class="col-6">
+              <label class="small text-muted mb-1">فیلد زمان (اختیاری)</label>
+              <input class="form-control form-control-sm" dir="ltr" value="${esc(src.time_path || '')}"
+                     oninput="updateApiSource(${si}, 'time_path', this.value)" placeholder="updatedAt">
+            </div>
+          </div>
+          <div class="small text-muted mt-2">
+            <i class="bi bi-clock me-1"></i>هر ${minutes} دقیقه یک درخواست (≈ ${Math.ceil(60 / minutes)} در ساعت)
+            ${conn && conn.hourly_limit ? ` — سقف «${esc(conn.name)}»: ${conn.hourly_limit} در ساعت` : ''}
+          </div>
+          ${warn}
+          <div class="d-flex align-items-center gap-2 mt-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="testApiSource(${si})">
+              <i class="bi bi-play-fill"></i> تست
+            </button>
+            <span id="api_out_${si}" class="small"></span>
+          </div>
+          <pre id="api_raw_${si}" class="small mt-2 mb-0 d-none" dir="ltr" style="white-space:pre-wrap;max-height:140px;overflow:auto"></pre>
+        </div>
+      </div>`;
+}
+
+async function testApiSource(si) {
+  const src = ensureCfg().sources[si];
+  const outEl = document.getElementById(`api_out_${si}`);
+  const rawEl = document.getElementById(`api_raw_${si}`);
+  outEl.innerHTML = '<span class="text-muted">در حال درخواست…</span>';
+  rawEl.classList.add('d-none');
+  try {
+    const d = await (await fetch('/api/api_sources/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection: src.connection, endpoint: src.endpoint,
+        value_path: src.value_path, time_path: src.time_path,
+      }),
+    })).json();
+    if (d.ok) {
+      outEl.innerHTML = `<span class="text-success">✓ مقدار: <b>${esc(String(d.value))}</b> <small class="text-muted" dir="ltr">${esc(d.time)}</small></span>`;
+      rawEl.textContent = d.raw;
+      rawEl.classList.remove('d-none');
+    } else {
+      outEl.innerHTML = `<span class="text-danger">✗ ${esc(d.msg || 'ناموفق')}</span>`;
+    }
+  } catch {
+    outEl.innerHTML = '<span class="text-danger">خطای شبکه</span>';
+  }
+}
+
+// ── API connections modal ───────────────────────────────
+let apiConns = [], apiPresets = {}, apiDefaultPoll = 5, apiConnMdl = null;
+
+async function loadApiConnections() {
+  try {
+    const d = await (await fetch('/api/api_connections')).json();
+    apiConns = d.connections || [];
+    apiPresets = d.presets || {};
+    apiDefaultPoll = d.default_poll_minutes || 5;
+  } catch { /* بدون اتصال، فهرست خالی */ }
+}
+
+async function openApiConnections() {
+  apiConnMdl = apiConnMdl || new bootstrap.Modal(document.getElementById('apiConnModal'));
+  await loadApiConnections();
+  const sel = document.getElementById('ac_provider');
+  sel.innerHTML = Object.entries(apiPresets)
+    .map(([k, p]) => `<option value="${esc(k)}">${esc(p.name)}</option>`).join('');
+  renderApiConnList();
+  resetApiConnForm();
+  apiConnMdl.show();
+}
+
+function renderApiConnList() {
+  const el = document.getElementById('apiConnList');
+  if (!apiConns.length) {
+    el.innerHTML = '<div class="text-muted small">هنوز اتصالی ثبت نشده.</div>';
+    return;
+  }
+  el.innerHTML = apiConns.map(c => {
+    const over = c.hourly_limit && c.estimated_hourly > c.hourly_limit;
+    return `
+    <div class="d-flex align-items-center justify-content-between border rounded p-2 mb-2">
+      <div>
+        <div><b>${esc(c.name)}</b> <small class="text-muted" dir="ltr">${esc(c.base_url)}</small></div>
+        <div class="small text-muted">
+          کلید: <span dir="ltr">${esc(c.api_key_masked || '—')}</span> ·
+          ${c.sources} سورس ·
+          <span class="${over ? 'text-danger fw-bold' : ''}">≈ ${c.estimated_hourly} درخواست در ساعت${c.hourly_limit ? ` از ${c.hourly_limit}` : ''}</span>
+          ${over ? ' — فاصله‌ی زمان‌بندی تاپیک‌ها را بیشتر کنید' : ''}
+        </div>
+      </div>
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-primary" onclick="editApiConnection('${esc(c.id)}')"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-sm btn-outline-danger" onclick="deleteApiConnection('${esc(c.id)}')"><i class="bi bi-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function apiConnProviderChanged() {
+  const p = apiPresets[document.getElementById('ac_provider').value] || {};
+  if (document.getElementById('ac_id').value) return;  // در ویرایش مقادیر فعلی حفظ شود
+  document.getElementById('ac_name').value = p.name && p.base_url ? p.name : '';
+  document.getElementById('ac_base_url').value = p.base_url || '';
+  document.getElementById('ac_auth_header').value = p.auth_header || '';
+  document.getElementById('ac_hourly_limit').value = p.hourly_limit || 0;
+}
+
+function resetApiConnForm() {
+  document.getElementById('apiConnFormTitle').textContent = 'اتصال جدید';
+  document.getElementById('ac_id').value = '';
+  document.getElementById('ac_api_key').value = '';
+  document.getElementById('ac_key_hint').textContent = '';
+  document.getElementById('ac_provider').value = 'goldapi';
+  apiConnProviderChanged();
+}
+
+function editApiConnection(id) {
+  const c = apiConns.find(x => x.id === id);
+  if (!c) return;
+  document.getElementById('apiConnFormTitle').textContent = `ویرایش «${c.name}»`;
+  document.getElementById('ac_id').value = c.id;
+  document.getElementById('ac_provider').value = c.provider;
+  document.getElementById('ac_name').value = c.name;
+  document.getElementById('ac_base_url').value = c.base_url;
+  document.getElementById('ac_auth_header').value = c.auth_header;
+  document.getElementById('ac_hourly_limit').value = c.hourly_limit;
+  document.getElementById('ac_api_key').value = '';
+  document.getElementById('ac_key_hint').textContent = c.api_key_masked
+    ? `کلید فعلی: ${c.api_key_masked} — خالی بگذارید تا حفظ شود` : '';
+}
+
+async function saveApiConnection() {
+  const body = {
+    id: document.getElementById('ac_id').value,
+    provider: document.getElementById('ac_provider').value,
+    name: document.getElementById('ac_name').value,
+    base_url: document.getElementById('ac_base_url').value,
+    auth_header: document.getElementById('ac_auth_header').value,
+    api_key: document.getElementById('ac_api_key').value,
+    hourly_limit: parseInt(document.getElementById('ac_hourly_limit').value) || 0,
+  };
+  try {
+    const d = await (await fetch('/api/api_connections', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })).json();
+    if (!d.ok) { showToast(d.msg || 'خطا', 'danger'); return; }
+    apiConns = d.connections || [];
+    renderApiConnList();
+    resetApiConnForm();
+    if (selGroupId && selTopicId !== null && selTopicId !== undefined) renderTopicDetail();
+    showToast('اتصال ذخیره شد ✓', 'success');
+  } catch { showToast('خطای شبکه', 'danger'); }
+}
+
+async function deleteApiConnection(id) {
+  if (!confirm('این اتصال حذف شود؟ سورس‌هایی که از آن استفاده می‌کنند غیرفعال می‌شوند.')) return;
+  try {
+    const d = await (await fetch(`/api/api_connections/${encodeURIComponent(id)}`, { method: 'DELETE' })).json();
+    apiConns = d.connections || [];
+    renderApiConnList();
+    resetApiConnForm();
+  } catch { showToast('خطای شبکه', 'danger'); }
+}
+
 function toggleSourceCleanText(si, val) {
   ensureCfg().sources[si].clean_text = !!val;
   markDirty();
@@ -1418,10 +1658,14 @@ function renderTopicDetail() {
 
     <div class="sec-head">
       <h6><i class="bi bi-broadcast-pin"></i> سورس‌ها</h6>
-      <button class="btn btn-sm btn-outline-primary" onclick="addSource()"><i class="bi bi-plus-lg me-1"></i>سورس</button>
+      <div class="d-flex gap-1">
+        <button class="btn btn-sm btn-outline-primary" onclick="addSource()"><i class="bi bi-plus-lg me-1"></i>سورس</button>
+        <button class="btn btn-sm btn-outline-success" onclick="addApiSource()"><i class="bi bi-plug me-1"></i>سورس API</button>
+      </div>
     </div>
     ${sources.length ? sources.map((src, si) => {
       const isEnabled = src.enabled !== false;
+      if (src.type === 'api') return renderApiSourceCard(src, si, isEnabled, cfg);
       return `
       <div class="source-card ${isEnabled ? '' : 'disabled'}">
         <div class="src-top">
@@ -1547,13 +1791,7 @@ async function saveAll() {
     chart_order: Number.isFinite(parseInt(data.chart_order)) ? parseInt(data.chart_order) : 0,
     check_interval: normCheckInterval(data.check_interval),
     max_change_percent: Number.isFinite(parseFloat(data.max_change_percent)) ? parseFloat(data.max_change_percent) : 10,
-    sources: (data.sources || []).map(s => ({
-      chat: s.chat || '',
-      filters: s.filters || [],
-      value_regex: s.value_regex || '',
-      enabled: s.enabled !== false,
-      clean_text: !!s.clean_text,
-    })),
+    sources: (data.sources || []).map(serializeSource),
   });
   const outGroups = groups.map(g => {
     const topics = [];

@@ -124,13 +124,23 @@ def _norm_topic(t: dict) -> dict:
 
 
 def _norm_source(s: dict) -> dict:
-    return {
+    out = {
+        'type': 'api' if s.get('type') == 'api' else 'telegram',
         'chat': s.get('chat', ''),
         'filters': s.get('filters', []),
         'value_regex': str(s.get('value_regex', '') or ''),
         'enabled': bool(s.get('enabled', True)),
         'clean_text': bool(s.get('clean_text', False)),
     }
+    if out['type'] == 'api':
+        # سورس API: عدد مستقیم از سرویس HTTP (اتصال در api_connections.json کاربر)
+        out.update({
+            'connection': str(s.get('connection', '') or ''),
+            'endpoint': str(s.get('endpoint', '') or ''),
+            'value_path': str(s.get('value_path', '') or ''),
+            'time_path': str(s.get('time_path', '') or ''),
+        })
+    return out
 
 
 def find_group(cfg: dict, group_id: str) -> dict | None:

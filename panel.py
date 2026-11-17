@@ -38,6 +38,7 @@ from config_util import (
     latest_two_rates, compute_change,
 )
 import forwarder as fwd
+import api_sources
 
 try:
     from telethon.tl.functions.messages import GetForumTopicsRequest, CreateForumTopicRequest
@@ -278,6 +279,28 @@ def save_user_config(tg_id: int, data: dict):
     with open(user_config_path(tg_id), 'w', encoding='utf-8') as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
+# اتصال‌های API جدا از config.json نگه داشته می‌شوند تا کلید در /api/config برنگردد
+# و ذخیره‌ی تاپیک‌ها (که فقط groups را می‌فرستد) آن‌ها را پاک نکند.
+def api_connections_path(tg_id: int) -> str:
+    return os.path.join(user_dir(tg_id), 'api_connections.json')
+
+def load_api_connections(tg_id: int) -> list[dict]:
+    try:
+        with open(api_connections_path(tg_id), 'r', encoding='utf-8') as f:
+            return [api_sources.norm_connection(c) for c in (json.load(f) or []) if c.get('id')]
+    except Exception:
+        return []
+
+def save_api_connections(tg_id: int, conns: list[dict]):
+    with open(api_connections_path(tg_id), 'w', encoding='utf-8') as f:
+        json.dump([api_sources.norm_connection(c) for c in conns], f, ensure_ascii=False, indent=2)
+
+def forwarder_config(tg_id: int) -> dict:
+    """config کاربر + اتصال‌های API — فقط برای فورواردر، نه پاسخ HTTP."""
+    cfg = load_user_config(tg_id)
+    cfg['api_connections'] = load_api_connections(tg_id)
+    return cfg
+
 def initialize_user_config(tg_id: int) -> dict:
     user_dir(tg_id)
     cfg = load_user_config(tg_id)
@@ -400,7 +423,7 @@ def rebuild_forwarder(uid: int) -> bool:
     if not c:
         _log_msg(uid, '— forwarder skipped: client not connected —')
         return False
-    cfg = load_user_config(uid)
+    cfg = forwarder_config(uid)
     try:
         tg_run(fwd.rebuild_and_install(uid, c, cfg), timeout=60)
         _fwd_active[uid] = True
@@ -576,7 +599,7 @@ async def _connect(uid: int):
             _tg_auth[uid]['phase'] = 'done'
             if not _fwd_active.get(uid):
                 try:
-                    cfg = load_user_config(uid)
+                    cfg = forwarder_config(uid)
                     await fwd.rebuild_and_install(uid, c, cfg)
                     _fwd_active[uid] = True
                     _log_msg(uid, f"forwarder online ({fwd.stats(uid)['routes']} routes)")
@@ -755,6 +778,97 @@ def update_config():
         **fwd.stats(uid),
     })
 
+# ══════════════════════════════════════════════════════════
+#  Routes — API: اتصال‌های API و تست سورس API
+# ══════════════════════════════════════════════════════════
+def _api_connections_public(uid: int) -> list[dict]:
+    """فهرست اتصال‌ها با کلید پوشیده + تخمین درخواست در ساعت از روی سورس‌ها."""
+    intervals: dict[str, list[int]] = {}
+    for g in load_user_config(uid).get('groups') or []:
+        for t in g.get('topics') or []:
+            for s in t.get('sources') or []:
+                if s.get('type') == 'api' and s.get('enabled', True):
+                    intervals.setdefault(s.get('connection', ''), []).append(int(t.get('check_interval') or 0))
+    out = []
+    for c in load_api_connections(uid):
+        row = {k: v for k, v in c.items() if k != 'api_key'}
+        row['api_key_masked'] = api_sources.mask_key(c['api_key'])
+        row['sources'] = len(intervals.get(c['id'], []))
+        row['estimated_hourly'] = api_sources.estimate_hourly(intervals.get(c['id'], []))
+        out.append(row)
+    return out
+
+
+@app.route('/api/api_connections', methods=['GET'])
+@login_required
+def api_connections_list():
+    presets = {k: {kk: vv for kk, vv in p.items()} for k, p in api_sources.PRESETS.items()}
+    return jsonify({'connections': _api_connections_public(cur_uid()), 'presets': presets,
+                    'default_poll_minutes': api_sources.DEFAULT_POLL_MINUTES})
+
+
+@app.route('/api/api_connections', methods=['POST'])
+@login_required
+def api_connections_save():
+    """افزودن/ویرایش اتصال. کلید خالی در ویرایش = حفظ کلید قبلی."""
+    uid = cur_uid()
+    data = request.get_json() or {}
+    conns = load_api_connections(uid)
+    cid = str(data.get('id') or '').strip()
+    existing = next((c for c in conns if c['id'] == cid), None) if cid else None
+    row = {
+        'id': cid or new_group_id(),
+        'name': (data.get('name') or '').strip(),
+        'provider': data.get('provider') or 'custom',
+        'base_url': (data.get('base_url') or '').strip(),
+        'auth_header': (data.get('auth_header') or '').strip(),
+        'api_key': (data.get('api_key') or '').strip() or (existing or {}).get('api_key', ''),
+        'hourly_limit': data.get('hourly_limit'),
+    }
+    row = api_sources.norm_connection(row)
+    if not row['base_url']:
+        return jsonify({'ok': False, 'msg': 'آدرس پایه (base URL) لازم است'}), 400
+    if existing:
+        conns = [row if c['id'] == cid else c for c in conns]
+    else:
+        conns.append(row)
+    save_api_connections(uid, conns)
+    rebuild_forwarder(uid)
+    return jsonify({'ok': True, 'id': row['id'], 'connections': _api_connections_public(uid)})
+
+
+@app.route('/api/api_connections/<conn_id>', methods=['DELETE'])
+@login_required
+def api_connections_delete(conn_id: str):
+    uid = cur_uid()
+    conns = [c for c in load_api_connections(uid) if c['id'] != conn_id]
+    save_api_connections(uid, conns)
+    rebuild_forwarder(uid)
+    return jsonify({'ok': True, 'connections': _api_connections_public(uid)})
+
+
+@app.route('/api/api_sources/test', methods=['POST'])
+@login_required
+def api_source_test():
+    """یک بار API را صدا می‌زند و عدد/زمان/JSON خام را برمی‌گرداند (از سهمیه کم می‌شود)."""
+    uid = cur_uid()
+    data = request.get_json() or {}
+    conn = next((c for c in load_api_connections(uid) if c['id'] == data.get('connection')), None)
+    if not conn:
+        return jsonify({'ok': False, 'msg': 'اتصال API انتخاب نشده یا پیدا نشد'}), 400
+    src = {k: data.get(k, '') for k in ('endpoint', 'value_path', 'time_path')}
+    try:
+        value, when, raw = asyncio.run(api_sources.fetch_value(conn, src))
+    except api_sources.ApiSourceError as e:
+        return jsonify({'ok': False, 'msg': str(e)})
+    except Exception as e:
+        _charts_log.error("[%s] api test failed: %s", uid, e, exc_info=True)
+        return jsonify({'ok': False, 'msg': f'خطای غیرمنتظره: {type(e).__name__}'})
+    raw_txt = json.dumps(raw, ensure_ascii=False)
+    return jsonify({'ok': True, 'value': value, 'time': when.isoformat(),
+                    'raw': raw_txt[:1500]})
+
+
 @app.route('/api/status')
 @login_required
 def get_status():
@@ -811,7 +925,7 @@ def fwd_refresh():
     c = ensure_client(uid)
     if not c:
         return jsonify({'ok': False, 'msg': 'اتصال تلگرام برقرار نیست'}), 503
-    cfg = load_user_config(uid)
+    cfg = forwarder_config(uid)
     try:
         info = tg_run(fwd.refresh_forwarder(uid, c, cfg), timeout=60)
     except Exception as e:
@@ -1058,6 +1172,17 @@ def fwd_diag():
                 'chart_label': r.get('chart_label') or '',
                 'interval_minutes': int(r.get('interval_minutes') or 0),
             })
+    for r in data.get('api_routes') or []:
+        sources.append({
+            'peer_id': None,
+            'api': r.get('source_chat'),
+            'group_id': r.get('gid'),
+            'topic_id': r.get('topic_id') if r.get('is_forum') else None,
+            'endpoint': (r.get('api_source') or {}).get('endpoint', ''),
+            'chart_enabled': bool(r.get('chart_enabled')),
+            'forward_enabled': bool(r.get('forward_enabled', True)),
+            'interval_minutes': int(r.get('interval_minutes') or 0),
+        })
     targets = [
         {'group_id': gid, 'title': getattr(ent, 'title', '') or getattr(ent, 'first_name', '') or str(gid)}
         for gid, ent in data['targets'].items()

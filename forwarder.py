@@ -32,6 +32,7 @@ from config_util import (
     aggregate_rate_daily, list_days_in_range,
     norm_check_interval,
 )
+import api_sources
 # charts را lazy لود می‌کنیم تا اگر matplotlib در سرور دچار خطا شد،
 # فوروارد عادی همچنان کار کند.
 try:
@@ -71,6 +72,9 @@ _interval_tasks: dict[int, asyncio.Task] = {}  # uid -> حلقه‌ی interval
 _buffer: dict[int, dict] = {}                  # uid -> {(gid, tid): {source_peer: آخرین item}}
 _last_run: dict[tuple, float] = {}             # (uid, gid, tid) -> زمان آخرین پردازش interval
 _cursor: dict[tuple, int] = {}                 # (uid, gid, tid, source_peer) -> آخرین message_id پردازش‌شده
+_api_tasks: dict[int, asyncio.Task] = {}       # uid -> حلقه‌ی poll سورس‌های API
+_api_last_poll: dict[tuple, float] = {}        # (uid,) + api_key -> زمان آخرین درخواست
+_api_last: dict[tuple, float] = {}             # (uid,) + api_key -> آخرین مقدار دریافتی
 
 
 def _topic_lock(store: dict, uid: int, gid: str, tid: int) -> asyncio.Lock:
@@ -153,8 +157,10 @@ async def _resolve(client, identifier):
 
 
 async def build_routes(uid: int, client, cfg: dict) -> dict:
+    connections = {c.get('id'): c for c in (cfg.get('api_connections') or []) if c.get('id')}
     cfg = normalize_config(cfg)
     source_map: dict[int, list] = {}
+    api_routes: list[dict] = []
     targets: dict[str, Any] = {}
     forum: dict[str, bool] = {}
 
@@ -202,6 +208,41 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                 # سورس‌های غیرفعال کاملاً نادیده گرفته می‌شوند
                 if s.get('enabled') is False:
                     continue
+                if s.get('type') == 'api':
+                    conn = connections.get(s.get('connection'))
+                    if not conn:
+                        logger.warning("[%s] api source topic=%s: connection %r not found",
+                                       uid, tid, s.get('connection'))
+                        continue
+                    api_routes.append({
+                        'gid': gid,
+                        'topic_id': tid,
+                        'filters': [],
+                        'is_forum': bool(is_forum),
+                        'chart_enabled': chart_enabled,
+                        'forward_enabled': forward_enabled,
+                        'chart_message_enabled': chart_message_enabled,
+                        'forum_rate_enabled': forum_rate_enabled,
+                        'chart_label': chart_label,
+                        'value_regex': '',
+                        'skip_unchanged': skip_unchanged,
+                        'chart_days': chart_days,
+                        'max_change_percent': max_change_pct,
+                        'clean_text': False,
+                        'interval_minutes': interval_minutes,
+                        'source_chat': f"api:{conn.get('name') or conn.get('id')}",
+                        'source_peer': 0,
+                        'source_entity': None,
+                        'api': True,
+                        'api_key': (gid, tid, conn.get('id'), s.get('endpoint', ''), s.get('value_path', '')),
+                        'api_connection': conn,
+                        'api_source': {
+                            'endpoint': s.get('endpoint', ''),
+                            'value_path': s.get('value_path', ''),
+                            'time_path': s.get('time_path', ''),
+                        },
+                    })
+                    continue
                 raw_chat = s.get('chat')
                 chat = raw_chat.strip() if isinstance(raw_chat, str) else raw_chat
                 if not chat:
@@ -240,12 +281,12 @@ async def build_routes(uid: int, client, cfg: dict) -> dict:
                 except Exception as e:
                     logger.warning("[%s] source %r resolve failed: %s", uid, chat, e)
 
-    routes = {'source_map': source_map, 'targets': targets, 'forum': forum}
+    routes = {'source_map': source_map, 'targets': targets, 'forum': forum, 'api_routes': api_routes}
     _routes[uid] = routes
     n = sum(len(v) for v in source_map.values())
     logger.info(
-        "[%s] routes ready: %d routes across %d targets (peer ids: %s)",
-        uid, n, len(targets), sorted(source_map.keys()),
+        "[%s] routes ready: %d routes + %d api across %d targets (peer ids: %s)",
+        uid, n, len(api_routes), len(targets), sorted(source_map.keys()),
     )
     return routes
 
@@ -632,8 +673,10 @@ async def _process_item(uid: int, client, route: dict, target, item: dict,
     tid = route['topic_id']
     peer_id = item['peer_id']
     raw_text = item['raw_text']
-    ckey = (uid, gid, tid, route.get('source_peer') or peer_id)
-    _cursor[ckey] = max(_cursor.get(ckey, 0), int(item['msg_id']))
+    is_api = bool(item.get('api'))
+    if not is_api:
+        ckey = (uid, gid, tid, route.get('source_peer') or peer_id)
+        _cursor[ckey] = max(_cursor.get(ckey, 0), int(item['msg_id']))
 
     use_topic = route.get('is_forum') and tid > 0
     wants_forward = route.get('forward_enabled', True)
@@ -656,10 +699,14 @@ async def _process_item(uid: int, client, route: dict, target, item: dict,
     prev_value_for_caption: float | None = None
     parsed_value: float | None = None
     parsed_raw_match: str | None = None
-    if route.get('chart_enabled') and raw_text:
-        value_regex = route.get('value_regex') or None
-        text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
-        v, raw_match = parse_value(text_for_parse, value_regex)
+    if route.get('chart_enabled') and (raw_text or is_api):
+        if is_api:
+            # سورس API: عدد مستقیم آمده، regex لازم نیست
+            v, raw_match = item.get('value'), raw_text
+        else:
+            value_regex = route.get('value_regex') or None
+            text_for_parse = _clean_text(raw_text) if route.get('clean_text') else raw_text
+            v, raw_match = parse_value(text_for_parse, value_regex)
         if v is not None:
             pre_parsed = (v, raw_match)
             parsed_value = v
@@ -702,7 +749,21 @@ async def _process_item(uid: int, client, route: dict, target, item: dict,
             await _update_forum_rate_message(uid, client, route, target, parsed_value,
                                              item.get('date'))
 
-    if wants_forward:
+    if wants_forward and is_api:
+        # پیامی برای فوروارد نیست — متن کوتاه نرخ در تاپیک فرستاده می‌شود
+        try:
+            text = _forum_rate_text(route, _local_time(item.get('date')), float(item['value']))
+            await client.send_message(target, text, parse_mode='html',
+                                      reply_to=tid if use_topic else None)
+            record_forward(uid, gid, tid if use_topic else 0, 0)
+            logger.info("[%s] api rate posted value=%s → group=%s topic=%s",
+                        uid, item['value'], gid, tid if use_topic else '-')
+        except Exception as e:
+            err = f"api post fail (group={gid} topic={tid}): {e}"
+            _last_error[uid] = err
+            logger.error("[%s] %s", uid, err)
+            return None
+    elif wants_forward:
         try:
             kwargs = {
                 'from_peer': item['chat'],
@@ -809,6 +870,56 @@ async def _interval_loop(uid: int, client):
             _spawn(uid, _run_topic_batch(uid, client, list(items.values()), 'interval'))
 
 
+async def _poll_api_route(uid: int, route: dict) -> dict | None:
+    """یک بار API سورس را صدا می‌زند و item آماده‌ی پردازش برمی‌گرداند."""
+    try:
+        value, when, _ = await api_sources.fetch_value(route['api_connection'], route['api_source'])
+    except api_sources.ApiSourceError as e:
+        _last_error[uid] = f"api ({route.get('source_chat')} topic={route.get('topic_id')}): {e}"
+        logger.warning("[%s] %s", uid, _last_error[uid])
+        return None
+    except Exception as e:
+        _last_error[uid] = f"api ({route.get('source_chat')} topic={route.get('topic_id')}): {e}"
+        logger.error("[%s] %s", uid, _last_error[uid], exc_info=True)
+        return None
+    # بدون چارت، تکراری بودن را فقط در حافظه چک می‌کنیم (latest_rate ثبت نمی‌شود)
+    key = (uid,) + route['api_key']
+    if (not route.get('chart_enabled') and route.get('skip_unchanged', True)
+            and key in _api_last and _values_equal(_api_last[key], value)):
+        return None
+    _api_last[key] = value
+    return {
+        'route': route, 'chat': None, 'msg_id': 0, 'peer_id': 0, 'api': True,
+        'value': value, 'raw_text': _fmt_value(value), 'date': when,
+    }
+
+
+async def _api_poll_loop(uid: int, client):
+    """سورس‌های API را در فاصله‌ی زمان‌بندی تاپیک (یا پیش‌فرض) صدا می‌زند."""
+    while True:
+        api_routes = (_routes.get(uid) or {}).get('api_routes') or []
+        now = time.monotonic()
+        due: dict[tuple, list] = {}
+        for route in api_routes:
+            minutes = int(route.get('interval_minutes') or 0) or api_sources.DEFAULT_POLL_MINUTES
+            pkey = (uid,) + route['api_key']
+            last = _api_last_poll.get(pkey)
+            if last is not None and now - last < minutes * 60:
+                continue
+            _api_last_poll[pkey] = now
+            due.setdefault((route['gid'], route['topic_id']), []).append(route)
+        for routes in due.values():
+            _spawn(uid, _poll_api_topic(uid, client, routes, 'api'))
+        await asyncio.sleep(INTERVAL_TICK_SECONDS)
+
+
+async def _poll_api_topic(uid: int, client, routes: list[dict], reason: str) -> int:
+    items = [it for it in await asyncio.gather(*(_poll_api_route(uid, r) for r in routes)) if it]
+    if items:
+        await _run_topic_batch(uid, client, items, reason)
+    return len(items)
+
+
 async def catch_up_latest(uid: int, client, scan_limit: int = 30) -> dict:
     """
     برای هر سورس، آخرین پیامِ منطبق با فیلترها را واکشی و پردازش می‌کند.
@@ -854,6 +965,15 @@ async def catch_up_latest(uid: int, client, scan_limit: int = 30) -> dict:
     for items in batches.values():
         await _run_topic_batch(uid, client, items, 'refresh')
         n += len(items)
+    api_topics: dict[tuple, list] = {}
+    for route in data.get('api_routes') or []:
+        _api_last_poll[(uid,) + route['api_key']] = time.monotonic()
+        api_topics.setdefault((route['gid'], route['topic_id']), []).append(route)
+    for key, routes in api_topics.items():
+        got = await _poll_api_topic(uid, client, routes, 'refresh')
+        if got:
+            batches.setdefault(key, [])
+            n += got
     logger.info("[%s] refresh: caught up %d latest message(s) across %d topic(s)", uid, n, len(batches))
     return {'topics': len(batches), 'messages': n}
 
@@ -868,6 +988,7 @@ def install_handler(uid: int, client):
             pass
         _handlers.pop(uid, None)
     _cancel_task(_interval_tasks.pop(uid, None))
+    _cancel_task(_api_tasks.pop(uid, None))
 
     async def _handler(event):
         data = _routes.get(uid)
@@ -915,6 +1036,8 @@ def install_handler(uid: int, client):
     client.add_event_handler(_handler, events.NewMessage(incoming=True))
     _handlers[uid] = _handler
     _interval_tasks[uid] = asyncio.get_running_loop().create_task(_interval_loop(uid, client))
+    if (_routes.get(uid) or {}).get('api_routes'):
+        _api_tasks[uid] = asyncio.get_running_loop().create_task(_api_poll_loop(uid, client))
     logger.info("[%s] handler installed", uid)
 
 
@@ -926,6 +1049,7 @@ def uninstall_handler(uid: int, client):
         except Exception:
             pass
     _cancel_task(_interval_tasks.pop(uid, None))
+    _cancel_task(_api_tasks.pop(uid, None))
     cancel_pending(uid)
 
 
@@ -934,14 +1058,15 @@ def status(uid: int) -> str:
     data = _routes.get(uid)
     if not data:
         return 'idle'
-    n = sum(len(v) for v in data['source_map'].values())
+    n = sum(len(v) for v in data['source_map'].values()) + len(data.get('api_routes') or [])
     return 'running' if n > 0 else 'no_sources'
 
 
 def stats(uid: int) -> dict:
     data = _routes.get(uid) or {'source_map': {}, 'targets': {}, 'forum': {}}
     return {
-        'routes': sum(len(v) for v in data['source_map'].values()),
+        'routes': sum(len(v) for v in data['source_map'].values()) + len(data.get('api_routes') or []),
+        'api_routes': len(data.get('api_routes') or []),
         'sources_peers': len(data['source_map']),
         'targets': len(data['targets']),
         'pending_tasks': sum(1 for t in _tasks.get(uid, ()) if not t.done()),

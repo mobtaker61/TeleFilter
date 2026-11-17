@@ -388,6 +388,9 @@
       <i class="bi bi-gear-fill"></i> تنظیمات
     </button>
     {% endif %}
+    <button class="btn-topbar" onclick="openApiConnections()" title="اتصال به سرویس‌های API برای دریافت نرخ">
+      <i class="bi bi-plug-fill"></i> اتصال‌های API
+    </button>
     <button class="btn-topbar" onclick="openPublicShare()" title="صفحه عمومی نمودارها">
       <i class="bi bi-share-fill"></i> اشتراک عمومی
     </button>
@@ -662,6 +665,60 @@
         <button class="btn btn-primary" style="border-radius:9px" onclick="saveSettings()">
           <i class="bi bi-check-lg me-1"></i>ذخیره
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: API Connections ═════════════════════════════ -->
+<div class="modal fade" id="apiConnModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plug-fill me-2" style="color:#2563eb"></i>اتصال‌های API</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="apiConnList" class="mb-3"></div>
+        <div class="border rounded p-3" style="background:#f8fafc">
+          <h6 class="mb-3" id="apiConnFormTitle">اتصال جدید</h6>
+          <input type="hidden" id="ac_id">
+          <div class="row g-2">
+            <div class="col-md-6">
+              <label class="form-label small">سرویس</label>
+              <select class="form-select form-select-sm" id="ac_provider" onchange="apiConnProviderChanged()"></select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">نام</label>
+              <input class="form-control form-control-sm" id="ac_name" placeholder="مثلاً GoldAPI">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">آدرس پایه (Base URL)</label>
+              <input class="form-control form-control-sm" id="ac_base_url" dir="ltr" placeholder="https://api.example.com/v1">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">نام هدر کلید</label>
+              <input class="form-control form-control-sm" id="ac_auth_header" dir="ltr" placeholder="X-API-Key">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">کلید API</label>
+              <input class="form-control form-control-sm font-monospace" id="ac_api_key" dir="ltr" type="password" autocomplete="off">
+              <div class="form-text small" id="ac_key_hint"></div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label small">سقف درخواست در ساعت (۰ = بدون سقف)</label>
+              <input class="form-control form-control-sm" id="ac_hourly_limit" type="number" min="0" step="1">
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-3">
+            <button class="btn btn-sm btn-primary" onclick="saveApiConnection()"><i class="bi bi-check-lg me-1"></i>ذخیره اتصال</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="resetApiConnForm()">اتصال جدید</button>
+          </div>
+        </div>
+        <p class="form-text mt-2 mb-0">
+          کلید فقط روی سرور نگه داشته می‌شود و در پنل به‌صورت پوشیده نمایش داده می‌شود.
+          سورس API را در صفحه‌ی هر تاپیک با «سورس API» اضافه کنید؛ فاصله‌ی درخواست‌ها همان «زمان‌بندی پردازش» تاپیک است.
+        </p>
       </div>
     </div>
   </div>
